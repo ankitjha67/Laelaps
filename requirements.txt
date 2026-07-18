@@ -1,0 +1,25 @@
+# Laelaps optional dependencies. Laelaps runs on the standard library + requests
+# alone and degrades gracefully without these; installing them unlocks full coverage.
+# (Laelaps will also try to auto-install any missing analyzer on first use.)
+
+requests            # HTTP for reputation lookups (VirusTotal / MalwareBazaar / URLhaus / urlscan)
+
+# --- deep static analysis ---
+pefile              # PE (Windows exe/dll) parsing: sections, imports, imphash, overlay, TLS
+yara-python         # YARA rule matching (built-in pack + family pack + custom rules dir)
+python-tlsh         # TLSH fuzzy hashing for family clustering
+oletools            # Office/OLE VBA + XLM macro extraction and analysis
+lief                # ELF / Mach-O parsing
+pdfminer.six        # deeper PDF structure analysis
+androguard          # APK / DEX manifest + permission analysis
+Pillow              # image steganography (LSB) checks
+numpy               # LSB statistics
+
+# --- optional UI / API / LLM ---
+rich                # pretty terminal rendering
+streamlit           # web UI (--ui)
+fastapi             # REST API (--api)
+uvicorn             # ASGI server for the REST API
+python-multipart    # file uploads for the REST API
+anthropic           # LLM verdict summary via Claude
+openai              # LLM verdict summary via GPT (fallback)
