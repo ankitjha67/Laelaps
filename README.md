@@ -1,4 +1,4 @@
-# 🐕 Laelaps — One-Stop Malware Detection, Attribution & Threat-Intel Engine
+# 🐕 Laelaps - One-Stop Malware Detection, Attribution & Threat-Intel Engine
 
 > *Laelaps: the hound of Greek myth fated to always catch what it hunts.*
 
@@ -6,12 +6,12 @@ A single-file, **defensive** malware analyzer. Point it at a **file**, a **URL**
 **hash** and it fuses a deep static-analysis engine with a threat-intel attribution
 engine to tell you:
 
-- **What** it is — infostealer, RAT, loader, ransomware, banker, clipper, keylogger
-- **Which** known family — LummaC2, RedLine, Vidar, StealC, AsyncRAT, Remcos, Cobalt Strike, LockBit, …
-- **What** it steals and **how** it exfiltrates — browser creds, cookies, wallets, 2FA; Telegram/Discord/dead-drop C2
-- **How** it's distributed — brand-impersonation domains, fake installers, loaders
+- **What** it is - infostealer, RAT, loader, ransomware, banker, clipper, keylogger
+- **Which** known family - LummaC2, RedLine, Vidar, StealC, AsyncRAT, Remcos, Cobalt Strike, LockBit, …
+- **What** it steals and **how** it exfiltrates - browser creds, cookies, wallets, 2FA; Telegram/Discord/dead-drop C2
+- **How** it's distributed - brand-impersonation domains, fake installers, loaders
 
-…then writes an **analyst-grade threat report**. It only inspects and reports — it
+…then writes an **analyst-grade threat report**. It only inspects and reports - it
 performs no malicious action. Same category as YARA, `oletools`, VirusTotal tooling,
 or a SOC triage script.
 
@@ -102,11 +102,11 @@ Optional API keys (all optional, more = better coverage):
 
 ## Verdict scale
 
-`clean` (<8) · `unknown` (8–27) · `suspicious` (28–59) · `malicious` (≥60) — score 0–100.
+`clean` (<8) · `unknown` (8-27) · `suspicious` (28-59) · `malicious` (≥60) - score 0-100.
 
 ## Tests
 
-All tests are hermetic and fully offline. Every sample is **inert** — EICAR-style
+All tests are hermetic and fully offline. Every sample is **inert** - EICAR-style
 recognition tokens with no working payload, entrypoint, or live infrastructure.
 
 ```bash
@@ -114,12 +114,12 @@ python3 tests/smoke_test.py     # 34 checks: one sample per detection domain end
 python3 tests/corpus_test.py    # 21 malware families attributed with correct category + UI wiring
 ```
 
-- **`tests/smoke_test.py`** — one crafted sample per detection domain (YARA/hash, reputation
+- **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
   wiring, format parsing, entropy/packers, IOC extraction, behavioral heuristics, script
   decode, CVE triggers, and the LummaC2/Electron attribution showcase), plus the URL scanner,
   score calibration (a clean file stays clean; Laelaps' own source is dampened as "reference
   content"), and CLI exit codes.
-- **`tests/corpus_test.py`** — attribution breadth across 21 families (LummaC2, RedLine, Vidar,
+- **`tests/corpus_test.py`** - attribution breadth across 21 families (LummaC2, RedLine, Vidar,
   StealC, Raccoon, AgentTesla, Snake, AsyncRAT, Quasar, njRAT, Remcos, NanoCore, DCRat, Cobalt
   Strike, Meterpreter, Amadey, SmokeLoader, Emotet, LockBit, Conti, BlackCat), and a headless
   render of the Streamlit report so the UI wiring is verified without a browser.
@@ -127,7 +127,7 @@ python3 tests/corpus_test.py    # 21 malware families attributed with correct ca
 ## Important limitations (read these)
 
 - **Static + reputation only.** No dynamic execution, memory, or live-network behavior.
-  Packing/obfuscation can hide indicators — *absence of a signal is not proof of safety*.
+  Packing/obfuscation can hide indicators - *absence of a signal is not proof of safety*.
   Confirm high-impact verdicts dynamically (CAPE / ANY.RUN / a real sandbox).
 - **Attribution is probabilistic**, built from public signatures. Corroborate with a
   second source before acting on it.

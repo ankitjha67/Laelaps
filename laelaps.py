@@ -406,7 +406,7 @@ def entropy_indicators(data: bytes) -> List[Indicator]:
             category="suspicious",
             severity="medium",
             title="Very high overall entropy",
-            detail=f"Shannon entropy: {overall:.3f}/8.0 — suggests encryption, compression, or packing.",
+            detail=f"Shannon entropy: {overall:.3f}/8.0 - suggests encryption, compression, or packing.",
             confidence=0.7,
         ))
     elif overall > 7.0:
@@ -415,7 +415,7 @@ def entropy_indicators(data: bytes) -> List[Indicator]:
             category="informational",
             severity="low",
             title="Elevated entropy",
-            detail=f"Shannon entropy: {overall:.3f}/8.0 — possibly compressed content.",
+            detail=f"Shannon entropy: {overall:.3f}/8.0 - possibly compressed content.",
             confidence=0.4,
         ))
 
@@ -428,7 +428,7 @@ def entropy_indicators(data: bytes) -> List[Indicator]:
                 category="suspicious",
                 severity="medium",
                 title="Mixed high-entropy regions",
-                detail=f"{high_windows}/{len(windows)} sliding windows show packed/encrypted content — consistent with dropper/loader pattern.",
+                detail=f"{high_windows}/{len(windows)} sliding windows show packed/encrypted content - consistent with dropper/loader pattern.",
                 confidence=0.6,
                 mitre_attack=["T1027"],
             ))
@@ -534,7 +534,7 @@ def ioc_indicators(iocs: Dict[str, List[str]]) -> List[Indicator]:
             category="suspicious",
             severity="high",
             title="Cryptocurrency wallet addresses embedded",
-            detail=f"Found {len(wallets)} wallet address(es) — consistent with ransomware or clipper malware.",
+            detail=f"Found {len(wallets)} wallet address(es) - consistent with ransomware or clipper malware.",
             evidence=", ".join(wallets[:5]),
             mitre_attack=["T1486"],
             confidence=0.75,
@@ -546,7 +546,7 @@ def ioc_indicators(iocs: Dict[str, List[str]]) -> List[Indicator]:
             category="malicious",
             severity="critical",
             title="Encoded PowerShell command found",
-            detail=f"Found {len(iocs['powershell_encoded'])} encoded PowerShell invocation(s) — nearly always malicious.",
+            detail=f"Found {len(iocs['powershell_encoded'])} encoded PowerShell invocation(s) - nearly always malicious.",
             evidence=iocs["powershell_encoded"][0][:200] if iocs["powershell_encoded"] else "",
             mitre_attack=["T1059.001", "T1027"],
             confidence=0.9,
@@ -569,7 +569,7 @@ def ioc_indicators(iocs: Dict[str, List[str]]) -> List[Indicator]:
             category="suspicious",
             severity="medium",
             title="Global mutex names",
-            detail=f"Found {len(iocs['mutex_names'])} global mutex(es) — used to prevent multiple infections.",
+            detail=f"Found {len(iocs['mutex_names'])} global mutex(es) - used to prevent multiple infections.",
             evidence=", ".join(iocs["mutex_names"][:5]),
             mitre_attack=["T1480"],
             confidence=0.6,
@@ -594,7 +594,7 @@ def ioc_indicators(iocs: Dict[str, List[str]]) -> List[Indicator]:
             category="informational",
             severity="info",
             title="URLs embedded",
-            detail=f"Extracted {len(iocs['urls'])} URLs — review for C2 / staging infrastructure.",
+            detail=f"Extracted {len(iocs['urls'])} URLs - review for C2 / staging infrastructure.",
             confidence=0.3,
         ))
 
@@ -612,7 +612,7 @@ SUSPICIOUS_KEYWORDS = {
     "WriteProcessMemory":      ("Remote process write", "high", ["T1055"]),
     "CreateRemoteThread":      ("Remote thread injection", "high", ["T1055.001"]),
     "QueueUserAPC":            ("APC injection", "high", ["T1055.004"]),
-    "SetWindowsHookEx":        ("Global hook — keylogger primitive", "high", ["T1056.001"]),
+    "SetWindowsHookEx":        ("Global hook - keylogger primitive", "high", ["T1056.001"]),
     "GetAsyncKeyState":        ("Keylogger primitive", "high", ["T1056.001"]),
     "GetForegroundWindow":     ("Window-context tracking", "medium", ["T1056"]),
     "NtUnmapViewOfSection":    ("Process hollowing", "critical", ["T1055.012"]),
@@ -631,7 +631,7 @@ SUSPICIOUS_KEYWORDS = {
     "OutputDebugString":       ("Debug string output", "low", []),
     "GetTickCount":            ("Timing-based sandbox evasion", "medium", ["T1497.003"]),
     "QueryPerformanceCounter": ("Timing evasion", "medium", ["T1497.003"]),
-    "Sleep":                   ("Delayed execution — sandbox evasion", "low", ["T1497.003"]),
+    "Sleep":                   ("Delayed execution - sandbox evasion", "low", ["T1497.003"]),
     "VBoxService":             ("VirtualBox detection", "high", ["T1497.001"]),
     "vmware":                  ("VMware detection", "high", ["T1497.001"]),
     "Wireshark":               ("Anti-analysis tool detection", "medium", ["T1518.001"]),
@@ -646,7 +646,7 @@ SUSPICIOUS_KEYWORDS = {
     # Credential access
     "SamiAcct":                ("SAM account access", "critical", ["T1003.002"]),
     "LSASS":                   ("LSASS access", "critical", ["T1003.001"]),
-    "MiniDumpWriteDump":       ("Process dump — LSASS dumping", "critical", ["T1003.001"]),
+    "MiniDumpWriteDump":       ("Process dump - LSASS dumping", "critical", ["T1003.001"]),
     "vaultcli":                ("Windows Vault access", "high", ["T1555.004"]),
     "keychain":                ("macOS Keychain access", "high", ["T1555.001"]),
     "Login Data":              ("Chrome credential DB", "high", ["T1555.003"]),
@@ -769,7 +769,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="suspicious",
                     severity="medium",
                     title="Future compile timestamp",
-                    detail=f"Compile timestamp is in the future ({compile_time}) — likely tampered.",
+                    detail=f"Compile timestamp is in the future ({compile_time}) - likely tampered.",
                     confidence=0.75,
                     mitre_attack=["T1070.006"],
                 ))
@@ -779,7 +779,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="suspicious",
                     severity="low",
                     title="Very old compile timestamp",
-                    detail=f"Compile timestamp predates 2000 ({compile_time}) — possibly zeroed or tampered.",
+                    detail=f"Compile timestamp predates 2000 ({compile_time}) - possibly zeroed or tampered.",
                     confidence=0.5,
                     mitre_attack=["T1070.006"],
                 ))
@@ -813,7 +813,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="suspicious",
                     severity="medium",
                     title=f"High entropy in section '{name}'",
-                    detail=f"Section entropy {entropy:.3f}/8.0 — likely packed or encrypted.",
+                    detail=f"Section entropy {entropy:.3f}/8.0 - likely packed or encrypted.",
                     confidence=0.7,
                     mitre_attack=["T1027.002"],
                 ))
@@ -823,7 +823,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="suspicious",
                     severity="medium",
                     title=f"Section '{name}' virtual size >> raw size",
-                    detail=f"Virtual size ({virt_size}) is much larger than raw ({raw_size}) — unpacker unpacking to this section.",
+                    detail=f"Virtual size ({virt_size}) is much larger than raw ({raw_size}) - unpacker unpacking to this section.",
                     confidence=0.7,
                     mitre_attack=["T1027.002"],
                 ))
@@ -882,7 +882,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                 category="malicious",
                 severity="critical",
                 title="Complete process-injection API trio",
-                detail="Imports VirtualAllocEx + WriteProcessMemory + CreateRemoteThread — classic process injection primitives.",
+                detail="Imports VirtualAllocEx + WriteProcessMemory + CreateRemoteThread - classic process injection primitives.",
                 confidence=0.9,
                 mitre_attack=["T1055.001", "T1055.002"],
             ))
@@ -893,7 +893,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                 category="malicious",
                 severity="critical",
                 title="Process-hollowing APIs present",
-                detail=f"Imports: {', '.join(hit)} — process hollowing / RunPE primitive.",
+                detail=f"Imports: {', '.join(hit)} - process hollowing / RunPE primitive.",
                 confidence=0.9,
                 mitre_attack=["T1055.012"],
             ))
@@ -914,7 +914,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                 category="suspicious",
                 severity="medium",
                 title=f"Suspiciously few imports ({len(imported_apis)})",
-                detail="Very small import table often indicates packing — real APIs resolved at runtime via GetProcAddress.",
+                detail="Very small import table often indicates packing - real APIs resolved at runtime via GetProcAddress.",
                 confidence=0.65,
                 mitre_attack=["T1027.002"],
             ))
@@ -930,7 +930,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="suspicious" if overlay_entropy > 7 else "informational",
                     severity="medium" if overlay_entropy > 7 else "low",
                     title=f"PE overlay: {overlay_size} bytes appended (entropy {overlay_entropy:.2f})",
-                    detail="Data appended after PE structure — commonly used to smuggle payloads or configs.",
+                    detail="Data appended after PE structure - commonly used to smuggle payloads or configs.",
                     confidence=0.7 if overlay_entropy > 7 else 0.4,
                     mitre_attack=["T1027"] if overlay_entropy > 7 else [],
                 ))
@@ -944,7 +944,7 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="informational",
                     severity="info",
                     title="File is digitally signed",
-                    detail="Signature verification not performed — check with sigcheck/osslsigncode for validity.",
+                    detail="Signature verification not performed - check with sigcheck/osslsigncode for validity.",
                     confidence=0.3,
                 ))
             else:
@@ -952,14 +952,14 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
         except Exception:
             pass
 
-        # Resources — TLS callbacks
+        # Resources - TLS callbacks
         if hasattr(pe, "DIRECTORY_ENTRY_TLS"):
             indicators.append(Indicator(
                 layer="pe",
                 category="suspicious",
                 severity="medium",
                 title="TLS callbacks present",
-                detail="TLS callbacks execute before the entrypoint — commonly used for anti-debug tricks.",
+                detail="TLS callbacks execute before the entrypoint - commonly used for anti-debug tricks.",
                 confidence=0.65,
                 mitre_attack=["T1027"],
             ))
@@ -1021,7 +1021,7 @@ def analyze_elf(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="suspicious",
                     severity="medium",
                     title="ptrace anti-debug usage",
-                    detail="Binary imports ptrace — commonly used to detect or prevent debugging.",
+                    detail="Binary imports ptrace - commonly used to detect or prevent debugging.",
                     confidence=0.7,
                     mitre_attack=["T1622"],
                 ))
@@ -1060,7 +1060,7 @@ def analyze_elf(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                             category="suspicious",
                             severity="medium",
                             title=f"High-entropy section '{name}'",
-                            detail=f"Section entropy {ent:.3f}/8.0 — possibly packed.",
+                            detail=f"Section entropy {ent:.3f}/8.0 - possibly packed.",
                             confidence=0.7,
                             mitre_attack=["T1027.002"],
                         ))
@@ -1075,7 +1075,7 @@ def analyze_elf(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                     category="informational",
                     severity="info",
                     title="Binary is stripped",
-                    detail="No symbol table — normal for stripped release builds but also common for malware.",
+                    detail="No symbol table - normal for stripped release builds but also common for malware.",
                     confidence=0.2,
                 ))
         except Exception:
@@ -1138,7 +1138,7 @@ def analyze_office(data: bytes, filepath: str) -> List[Indicator]:
                 category="malicious",
                 severity="critical",
                 title="Excel 4.0 (XLM) macros present",
-                detail="Legacy Excel 4.0 macros — nearly always malicious in modern documents.",
+                detail="Legacy Excel 4.0 macros - nearly always malicious in modern documents.",
                 confidence=0.9,
                 mitre_attack=["T1059.005"],
             ))
@@ -1240,7 +1240,7 @@ def analyze_office(data: bytes, filepath: str) -> List[Indicator]:
                 category="malicious",
                 severity="critical",
                 title="Follina (CVE-2022-30190) exploit pattern",
-                detail="MSDT URI scheme reference — Follina RCE exploit.",
+                detail="MSDT URI scheme reference - Follina RCE exploit.",
                 confidence=0.95,
                 mitre_attack=["T1203"],
             ))
@@ -1328,7 +1328,7 @@ def analyze_pdf(data: bytes) -> List[Indicator]:
             category="suspicious",
             severity="medium",
             title="Unusual object-to-stream ratio",
-            detail=f"{obj_count} objects, {stream_count} streams — possible obfuscation.",
+            detail=f"{obj_count} objects, {stream_count} streams - possible obfuscation.",
             confidence=0.55,
         ))
 
@@ -1339,7 +1339,7 @@ def analyze_pdf(data: bytes) -> List[Indicator]:
             category="suspicious",
             severity="medium",
             title="Hex-encoded PDF stream",
-            detail="Stream content is hex-encoded — obfuscation.",
+            detail="Stream content is hex-encoded - obfuscation.",
             confidence=0.65,
             mitre_attack=["T1027"],
         ))
@@ -1351,7 +1351,7 @@ def analyze_pdf(data: bytes) -> List[Indicator]:
             category="suspicious",
             severity="medium",
             title="Multiple /ObjStm object streams",
-            detail=f"{data.count(b'/ObjStm')} object streams — often used to hide malicious objects.",
+            detail=f"{data.count(b'/ObjStm')} object streams - often used to hide malicious objects.",
             confidence=0.6,
         ))
 
@@ -1481,7 +1481,7 @@ DANGEROUS_ANDROID_PERMISSIONS = {
 
 
 def analyze_apk(data: bytes, filepath: str) -> List[Indicator]:
-    """Basic APK triage — permissions, embedded native libs, DEX."""
+    """Basic APK triage - permissions, embedded native libs, DEX."""
     indicators = []
 
     if not data.startswith(b"PK\x03\x04"):
@@ -1526,7 +1526,7 @@ def analyze_apk(data: bytes, filepath: str) -> List[Indicator]:
                             category="suspicious",
                             severity="medium",
                             title="Low maxSdkVersion",
-                            detail="Targets old Android — common evasion for runtime-perm restrictions.",
+                            detail="Targets old Android - common evasion for runtime-perm restrictions.",
                             confidence=0.5,
                         ))
                 except Exception:
@@ -1636,7 +1636,7 @@ def analyze_archive(data: bytes) -> Tuple[List[Indicator], List[Tuple[str, bytes
                         category="suspicious",
                         severity="high",
                         title="Password-protected archive contents",
-                        detail=f"Cannot inspect: {i.filename} — password-required archives are a common malware delivery trick.",
+                        detail=f"Cannot inspect: {i.filename} - password-required archives are a common malware delivery trick.",
                         confidence=0.75,
                         mitre_attack=["T1027.013"],
                     ))
@@ -1725,7 +1725,7 @@ def analyze_image(data: bytes) -> List[Indicator]:
                         category="informational",
                         severity="low",
                         title="LSB distribution close to 0.5",
-                        detail=f"LSB mean = {mean:.4f} — statistically consistent with LSB steganography (but also normal for photos).",
+                        detail=f"LSB mean = {mean:.4f} - statistically consistent with LSB steganography (but also normal for photos).",
                         confidence=0.35,
                         mitre_attack=["T1027.003"],
                     ))
@@ -2180,7 +2180,7 @@ def llm_verdict(verdict: Verdict) -> Optional[str]:
 2. Most compelling evidence (the top 3-5 indicators that drove the verdict)
 3. Likely malware family or capability class (if identifiable)
 4. Recommended next steps for the analyst (deeper analysis techniques, containment, etc.)
-5. Caveats — what static analysis alone can't tell us
+5. Caveats - what static analysis alone can't tell us
 
 Be direct and technical. This goes to another analyst, not an executive.
 
@@ -2195,7 +2195,7 @@ ANALYSIS DATA:
             try:
                 client = anth.Anthropic(api_key=anthropic_key)
                 resp = client.messages.create(
-                    model="claude-sonnet-4-6",
+                    model="claude-sonnet-5",
                     max_tokens=1500,
                     messages=[{"role": "user", "content": prompt}],
                 )
@@ -2695,11 +2695,11 @@ def launch_streamlit() -> None:
 
 
 def streamlit_app() -> None:
-    """Streamlit interface — called when we're inside a streamlit run."""
+    """Streamlit interface - called when we're inside a streamlit run."""
     import streamlit as st
 
     st.set_page_config(page_title="Laelaps Malware Analyzer", page_icon="🐕", layout="wide")
-    st.title("🐕 Laelaps — Malware Detection, Attribution & Threat-Intel")
+    st.title("🐕 Laelaps - Malware Detection, Attribution & Threat-Intel")
     st.caption("Deep static analysis + family attribution + threat-report generation in one agent.")
 
     with st.sidebar:
@@ -2799,7 +2799,7 @@ def _streamlit_render_v2(rep: "V2Report", st) -> None:
     st.markdown(f"## {badge} Verdict: **{rep.verdict.upper()}**  ·  Threat score **{rep.score:.1f}/100**")
 
     if rep.reference_only:
-        st.info("Reference content, not operational malware — this reads as detection rules / "
+        st.info("Reference content, not operational malware - this reads as detection rules / "
                 "threat-intel / analysis code, so the score is dampened. Verify manually.")
     else:
         st.markdown("> " + build_one_liner(rep.families, rep.capabilities, rep.loaders,
@@ -2842,7 +2842,7 @@ def _streamlit_render_v2(rep: "V2Report", st) -> None:
     if rep.brand_impersonation:
         st.subheader("Brand-impersonation domains")
         for b in rep.brand_impersonation:
-            st.markdown(f"- **{b['host']}** — {b['reasons']}")
+            st.markdown(f"- **{b['host']}** - {b['reasons']}")
 
     if rep.persistence:
         st.subheader("Persistence")
@@ -4328,7 +4328,7 @@ def build_one_liner(fam: List[FamilyMatch], caps: Dict, loaders: List[str],
 
 def generate_report(r: "V2Report") -> str:
     L = []
-    L.append(f"# Threat Analysis Report — {r.filename}")
+    L.append(f"# Threat Analysis Report - {r.filename}")
     L.append(f"*Generated {r.timestamp} · Laelaps static + attribution engine*\n")
     badge = {"malicious": "🔴 MALICIOUS", "suspicious": "🟡 SUSPICIOUS",
              "clean": "🟢 CLEAN", "unknown": "🔵 UNKNOWN"}[r.verdict]
@@ -4361,7 +4361,7 @@ def generate_report(r: "V2Report") -> str:
             L.append(f"| **{f.family}** | {f.category} | {int(f.confidence*100)}% | {basis} |")
         L.append("")
         top = r.families[0]
-        L.append(f"**Lead attribution — {top.family}:** {top.description}")
+        L.append(f"**Lead attribution - {top.family}:** {top.description}")
         if top.distribution:
             L.append(f"\n*Distribution:* {top.distribution}")
     else:
@@ -4394,9 +4394,9 @@ def generate_report(r: "V2Report") -> str:
         L.append("")
 
     if r.brand_impersonation:
-        L.append("## 6. Distribution — Brand-Impersonation Domains")
+        L.append("## 6. Distribution - Brand-Impersonation Domains")
         for b in r.brand_impersonation:
-            L.append(f"- **{b['host']}** — {b['reasons']}")
+            L.append(f"- **{b['host']}** - {b['reasons']}")
         L.append("")
 
     if r.persistence:
@@ -4421,7 +4421,7 @@ def generate_report(r: "V2Report") -> str:
     if r.reputation:
         for src, res in r.reputation.items():
             if isinstance(res, dict) and res.get("found"):
-                L.append(f"- **{src}:** KNOWN — {json.dumps({k: v for k, v in res.items() if k != 'found'})}")
+                L.append(f"- **{src}:** KNOWN - {json.dumps({k: v for k, v in res.items() if k != 'found'})}")
             elif isinstance(res, dict) and res.get("found") is False:
                 L.append(f"- **{src}:** not found (first-seen / private)")
             elif isinstance(res, dict) and res.get("error"):
@@ -4436,14 +4436,14 @@ def generate_report(r: "V2Report") -> str:
     if r.verdict in ("malicious", "suspicious"):
         L.append("- **Contain:** isolate the host; block the C2/exfil indicators above at proxy/DNS/firewall.")
         L.append("- **Rotate:** treat all browser-stored passwords, session cookies, wallet seeds and "
-                 "2FA seeds on the host as compromised — force password resets and re-issue MFA.")
+                 "2FA seeds on the host as compromised - force password resets and re-issue MFA.")
         L.append("- **Hunt:** sweep for the persistence entries and IOCs across the fleet.")
         L.append("- **Confirm dynamically:** detonate in a sandbox (CAPE / ANY.RUN) for live C2 + behavior.")
     else:
         L.append("- No malicious indicators; monitor as usual. Re-scan if provenance is uncertain.")
     L.append("")
     L.append("## 12. Caveats")
-    L.append("- Static + reputation analysis only — no dynamic execution, memory or network behavior.")
+    L.append("- Static + reputation analysis only - no dynamic execution, memory or network behavior.")
     L.append("- Family attribution is confidence-weighted from public signatures; corroborate a "
              "high-impact verdict with a second source (VT/sandbox) before acting.")
     L.append("- Absence of a signal is not proof of safety (packing/obfuscation can hide behavior).")
@@ -4508,7 +4508,7 @@ def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optiona
     rep.brand_impersonation = brand
     for b in brand:
         signals.append(Signal(engine="brand", severity="high", title="Brand-impersonation domain",
-                              detail=f"{b['host']} — {b['reasons']}", confidence=0.7, mitre=["T1656"]))
+                              detail=f"{b['host']} - {b['reasons']}", confidence=0.7, mitre=["T1656"]))
 
     persistence = scan_persistence(corpus_lc)
     rep.persistence = persistence
@@ -4613,7 +4613,7 @@ def render_terminal(rep: V2Report) -> None:
 def render_url(res: Dict[str, Any]) -> None:
     badge = {"malicious": "🔴 MALICIOUS", "suspicious": "🟡 SUSPICIOUS",
              "clean": "🟢 LIKELY CLEAN", "unknown": "🔵 UNCERTAIN"}[res["verdict"]]
-    print(f"# URL Scan — {res['url']}")
+    print(f"# URL Scan - {res['url']}")
     print(f"## Verdict: {badge}  ·  score {res['score']}/100  ·  host `{res['host']}`\n")
     if res["signals"]:
         print("| Severity | Finding | Detail |")
