@@ -106,12 +106,23 @@ Optional API keys (all optional, more = better coverage):
 
 ## Tests
 
-`tests/smoke_test.py` runs one crafted, **inert** sample (EICAR-style strings, no working
-payload) per detection domain and asserts each fires end-to-end, plus score calibration:
+All tests are hermetic and fully offline. Every sample is **inert** — EICAR-style
+recognition tokens with no working payload, entrypoint, or live infrastructure.
 
 ```bash
-python3 tests/smoke_test.py     # 34 checks, fully offline, exit 0 on success
+python3 tests/smoke_test.py     # 34 checks: one sample per detection domain end-to-end
+python3 tests/corpus_test.py    # 21 malware families attributed with correct category + UI wiring
 ```
+
+- **`tests/smoke_test.py`** — one crafted sample per detection domain (YARA/hash, reputation
+  wiring, format parsing, entropy/packers, IOC extraction, behavioral heuristics, script
+  decode, CVE triggers, and the LummaC2/Electron attribution showcase), plus the URL scanner,
+  score calibration (a clean file stays clean; Laelaps' own source is dampened as "reference
+  content"), and CLI exit codes.
+- **`tests/corpus_test.py`** — attribution breadth across 21 families (LummaC2, RedLine, Vidar,
+  StealC, Raccoon, AgentTesla, Snake, AsyncRAT, Quasar, njRAT, Remcos, NanoCore, DCRat, Cobalt
+  Strike, Meterpreter, Amadey, SmokeLoader, Emotet, LockBit, Conti, BlackCat), and a headless
+  render of the Streamlit report so the UI wiring is verified without a browser.
 
 ## Important limitations (read these)
 

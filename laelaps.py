@@ -2699,8 +2699,8 @@ def streamlit_app() -> None:
     import streamlit as st
 
     st.set_page_config(page_title="Laelaps Malware Analyzer", page_icon="🐕", layout="wide")
-    st.title("🐕 Laelaps — Multi-Engine Malware Analysis")
-    st.caption("Static + reputation + heuristic + LLM analysis in one agent.")
+    st.title("🐕 Laelaps — Malware Detection, Attribution & Threat-Intel")
+    st.caption("Deep static analysis + family attribution + threat-report generation in one agent.")
 
     with st.sidebar:
         st.subheader("Configuration")
@@ -2709,6 +2709,7 @@ def streamlit_app() -> None:
         anth_key = st.text_input("Anthropic API Key (optional, for LLM verdict)",
                                  type="password", value=os.environ.get("ANTHROPIC_API_KEY", ""))
         offline = st.checkbox("Offline mode (skip all network calls)")
+        no_llm = st.checkbox("Skip LLM verdict summary")
         yara_dir = st.text_input("Custom YARA rules directory (optional)")
         recursive = st.slider("Archive recursion depth", 0, 3, 1)
 
@@ -2733,9 +2734,9 @@ def streamlit_app() -> None:
 
             try:
                 with st.spinner(f"Analyzing {uploaded.name}..."):
-                    verdict = analyze_file(tf_path, yara_rules_dir=yara_dir if yara_dir else None,
-                                           recursive_depth=recursive)
-                _streamlit_render_verdict(verdict, st)
+                    rep = analyze_file_v2(tf_path, use_llm=not no_llm,
+                                          yara_rules_dir=yara_dir or None, recursive_depth=recursive)
+                _streamlit_render_v2(rep, st)
             finally:
                 try:
                     os.unlink(tf_path)
@@ -2743,49 +2744,46 @@ def streamlit_app() -> None:
                     pass
 
     with tab2:
-        st.subheader("Analyze by URL or Hash")
-        input_val = st.text_input("URL to download and analyze, or a hash (MD5/SHA1/SHA256)")
+        st.subheader("Scan a URL or Hash")
+        input_val = st.text_input("A URL to scan, or a hash (MD5/SHA1/SHA256)")
+        deep = st.checkbox("Deep mode: download & analyze the payload (sandbox only!)")
         if st.button("Analyze"):
             if not input_val:
                 st.warning("Enter a URL or hash.")
-            elif input_val.startswith(("http://", "https://")):
-                with st.spinner(f"Downloading and analyzing {input_val}..."):
-                    try:
-                        verdict = fetch_and_analyze(input_val,
-                                                    yara_rules_dir=yara_dir if yara_dir else None)
-                        _streamlit_render_verdict(verdict, st)
-                    except Exception as e:
-                        st.error(f"Fetch failed: {e}")
-            elif re.match(r"^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$", input_val):
+            elif re.fullmatch(r"[a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", input_val):
                 with st.spinner("Querying threat intel..."):
-                    result = analyze_hash(input_val)
                     st.subheader(f"Hash: {input_val}")
-                    st.json(result)
+                    st.json(rep_hash(input_val))
             else:
-                st.error("Not a valid URL or hash.")
+                with st.spinner(f"Scanning {input_val}..."):
+                    try:
+                        _streamlit_render_url(scan_url(input_val, deep=deep), st)
+                    except Exception as e:
+                        st.error(f"URL scan failed: {e}")
 
     with tab3:
         st.markdown("""
 ### About Laelaps
 
-**Laelaps** runs a comprehensive static + reputation + heuristic analysis pipeline over any file you throw at it.
+**Laelaps** fuses a deep static-analysis engine with a threat-intel attribution engine
+and writes an analyst-grade report for any file, URL, or hash.
 
-**Detection layers:**
-- Multi-hash computation (MD5, SHA1, SHA256, SHA512, TLSH, ssdeep, imphash)
-- File-format-aware analysis: PE, ELF, Mach-O, PDF, Office, APK/DEX, scripts
-- Entropy analysis with sliding-window detection of packed regions
-- Suspicious API import combos (injection trio, hollowing, keylogging patterns)
-- IOC extraction: URLs, IPs, domains, wallets, mutexes, base64 blobs, shellcode
-- Suspicious keyword hunting mapped to MITRE ATT&CK
-- YARA rule matching (built-in + custom directory)
-- VBA/XLM macro analysis with oletools
-- PDF structure analysis (JavaScript, launch actions, embedded files)
-- Script analysis: PowerShell, VBS, JS, Bash, Batch
-- APK permission and native library scan
-- Archive recursive expansion (with zip-bomb / zip-slip detection)
-- Image steganography checks (trailing data, LSB stats)
-- Threat intel reputation: VirusTotal, MalwareBazaar, ThreatFox
-- LLM-powered verdict summary (Claude Sonnet or GPT)
+**Deep static engine:**
+- Multi-hash (MD5, SHA1, SHA256, SHA512, TLSH, ssdeep, imphash) + VirusTotal / MalwareBazaar / ThreatFox
+- Format-aware parsing: PE, ELF, Mach-O, PDF, Office/OLE, APK/DEX, scripts
+- Entropy & packer detection, suspicious API combos (injection trio, hollowing, keylogging)
+- IOC extraction, YARA (built-in + custom), VBA/XLM macros, PDF JS, PowerShell decode
+- Archive recursion (zip-slip / zip-bomb), image steganography
+- CVE / exploit strings (Log4Shell, Follina, EternalBlue, PrintNightmare) → MITRE ATT&CK
+
+**Attribution & threat-intel engine:**
+- Family attribution for ~30 families (LummaC2, RedLine, Vidar, AsyncRAT, Cobalt Strike, LockBit, …)
+- Loader / packer / wrapper detection (Electron, NSIS, Themida, VMProtect, .NET Reactor, …)
+- Electron/ASAR + .NET/CLR analysis, brand-impersonation / typosquat detection
+- C2 fingerprinting (Telegram, Discord webhook, dead-drops, gate.php)
+- Capability profiling, credential/wallet target enumeration, persistence + Sigma correlation
+- URL scanner (structure + reputation, optional deep fetch) and threat-report generator
+- Optional LLM verdict summary (Claude or GPT)
 
 **Configuration:**
 Set `VT_API_KEY`, `MB_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` for full functionality.
@@ -2795,86 +2793,122 @@ Set `LAELAPS_OFFLINE=1` for air-gapped analysis.
 """)
 
 
-def _streamlit_render_verdict(verdict: Verdict, st) -> None:
-    """Render a verdict in Streamlit."""
-    color = {
-        "malicious": "🔴",
-        "suspicious": "🟡",
-        "unknown": "🔵",
-        "clean": "🟢",
-    }[verdict.verdict]
+def _streamlit_render_v2(rep: "V2Report", st) -> None:
+    """Render a full Laelaps threat report (V2Report) in Streamlit."""
+    badge = {"malicious": "🔴", "suspicious": "🟡", "unknown": "🔵", "clean": "🟢"}[rep.verdict]
+    st.markdown(f"## {badge} Verdict: **{rep.verdict.upper()}**  ·  Threat score **{rep.score:.1f}/100**")
 
-    st.markdown(f"## {color} Verdict: **{verdict.verdict.upper()}**  ·  Score: **{verdict.score:.1f}/100**")
+    if rep.reference_only:
+        st.info("Reference content, not operational malware — this reads as detection rules / "
+                "threat-intel / analysis code, so the score is dampened. Verify manually.")
+    else:
+        st.markdown("> " + build_one_liner(rep.families, rep.capabilities, rep.loaders,
+                                           rep.brand_impersonation, rep.c2))
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("File type", verdict.filetype[:30])
-    col2.metric("Size", f"{verdict.size_bytes:,} B")
-    col3.metric("Indicators", len(verdict.indicators))
-    col4.metric("Analysis time", f"{verdict.analysis_time_seconds}s")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("File type", rep.filetype[:28])
+    c2.metric("Size", f"{rep.size_bytes:,} B")
+    c3.metric("Signals", len(rep.signals))
+    c4.metric("Families", len(rep.families))
 
     with st.expander("Hashes", expanded=False):
-        st.json(verdict.hashes)
+        st.json(rep.hashes)
 
-    # Reputation
-    if verdict.reputation:
-        st.subheader("Threat Intel Reputation")
-        cols = st.columns(len(verdict.reputation))
-        for col, (src, res) in zip(cols, verdict.reputation.items()):
-            with col:
-                st.markdown(f"**{src}**")
-                if res.get("found"):
-                    st.error("Known malicious")
-                elif res.get("found") is False:
-                    st.info("Not found")
-                elif "error" in res:
-                    st.warning(res["error"])
-                st.json(res, expanded=False)
+    if rep.loaders:
+        st.markdown("**Packaging / loader:** " + ", ".join(rep.loaders))
 
-    # Indicators
-    if verdict.indicators:
-        st.subheader("Indicators")
+    if rep.families:
+        st.subheader("Family attribution")
+        st.table([{"Family": f.family, "Category": f.category,
+                   "Confidence": f"{int(f.confidence * 100)}%",
+                   "Basis": "; ".join(f.matched_signals[:3])} for f in rep.families[:8]])
+
+    if rep.capabilities:
+        st.subheader("Capabilities")
+        st.table([{"Capability": cap, "Confidence": f"{int(m['confidence'] * 100)}%",
+                   "Evidence": ", ".join(m["evidence"][:4])}
+                  for cap, m in sorted(rep.capabilities.items(), key=lambda kv: -kv[1]["confidence"])])
+
+    if rep.targeted_assets:
+        st.subheader("Targeted assets")
+        for cat, items in rep.targeted_assets.items():
+            st.markdown(f"- **{cat}:** {', '.join(items[:8])}")
+
+    if rep.c2:
+        st.subheader("C2 / exfiltration")
+        st.table([{"Channel": c["channel"], "Severity": c["severity"], "Indicator": c["match"]}
+                  for c in rep.c2])
+
+    if rep.brand_impersonation:
+        st.subheader("Brand-impersonation domains")
+        for b in rep.brand_impersonation:
+            st.markdown(f"- **{b['host']}** — {b['reasons']}")
+
+    if rep.persistence:
+        st.subheader("Persistence")
+        for p in rep.persistence:
+            st.markdown(f"- {p['technique']}  *(MITRE {p['mitre']})*")
+
+    if rep.signals:
+        st.subheader("Signals")
         by_sev = defaultdict(list)
-        for ind in verdict.indicators:
-            by_sev[ind.severity].append(ind)
-
+        for s in rep.signals:
+            by_sev[s.severity].append(s)
         for sev in ("critical", "high", "medium", "low", "info"):
             if sev not in by_sev:
                 continue
             with st.expander(f"{sev.upper()} ({len(by_sev[sev])})",
                              expanded=(sev in ("critical", "high"))):
-                for ind in by_sev[sev]:
-                    st.markdown(f"**[{ind.layer}]** {ind.title}")
-                    st.caption(ind.detail)
-                    if ind.mitre_attack:
-                        st.markdown(f"*MITRE: {', '.join(ind.mitre_attack)}*")
+                for s in by_sev[sev]:
+                    st.markdown(f"**[{s.engine}]** {s.title}")
+                    st.caption(s.detail)
+                    if s.mitre:
+                        st.markdown(f"*MITRE: {', '.join(s.mitre)}*")
                     st.divider()
 
-    if verdict.mitre_techniques:
-        st.subheader("MITRE ATT&CK Techniques")
-        st.write(", ".join(verdict.mitre_techniques))
-
-    if verdict.families:
-        st.subheader("Attributed Families")
-        st.write(", ".join(verdict.families))
-
-    if verdict.ioc_extracted:
+    if rep.iocs:
         with st.expander("Extracted IOCs", expanded=False):
-            for kind, values in verdict.ioc_extracted.items():
+            for kind, values in rep.iocs.items():
                 if values:
                     st.markdown(f"**{kind}** ({len(values)})")
                     st.code("\n".join(values[:50]))
 
-    if verdict.llm_summary:
-        st.subheader("AI Verdict Summary")
-        st.markdown(verdict.llm_summary)
+    if rep.mitre:
+        st.subheader("MITRE ATT&CK Techniques")
+        st.write(", ".join(rep.mitre))
 
-    # JSON download
+    if rep.llm_summary:
+        st.subheader("AI Analyst Summary")
+        st.markdown(rep.llm_summary)
+
+    with st.expander("Full Markdown threat report", expanded=False):
+        st.markdown(rep.report_md)
+
     st.download_button(
         "Download full JSON report",
-        data=json.dumps(verdict.to_dict(), indent=2, default=str),
-        file_name=f"laelaps_{verdict.hashes.get('sha256', 'unknown')[:16]}.json",
+        data=json.dumps(rep.to_dict(), indent=2, default=str),
+        file_name=f"laelaps_{rep.hashes.get('sha256', 'unknown')[:16]}.json",
         mime="application/json",
     )
+
+
+def _streamlit_render_url(res: Dict[str, Any], st) -> None:
+    """Render a URL scan result in Streamlit."""
+    badge = {"malicious": "🔴", "suspicious": "🟡", "clean": "🟢", "unknown": "🔵"}[res["verdict"]]
+    st.markdown(f"## {badge} URL verdict: **{res['verdict'].upper()}**  ·  score **{res['score']}/100**")
+    st.caption(f"host: {res['host']}")
+    if res["signals"]:
+        st.table([{"Severity": s["severity"], "Finding": s["title"], "Detail": s["detail"][:100]}
+                  for s in res["signals"]])
+    reputation = {k: v for k, v in (res.get("reputation") or {}).items() if v}
+    if reputation:
+        st.subheader("Reputation")
+        st.json(reputation)
+    if res.get("deep_analysis"):
+        d = res["deep_analysis"]
+        st.subheader("Deep payload analysis")
+        st.markdown(f"Downloaded payload verdict: **{d['verdict']}** ({d['score']}/100). "
+                    f"Families: {[f['family'] for f in d.get('families', [])]}")
 
 
 # ==============================================================================
@@ -2904,8 +2938,8 @@ def launch_api(host: str = "127.0.0.1", port: int = 8765) -> None:
             tf.write(content)
             tf_path = tf.name
         try:
-            verdict = analyze_file(tf_path)
-            return JSONResponse(verdict.to_dict())
+            rep = analyze_file_v2(tf_path)
+            return JSONResponse(rep.to_dict())
         finally:
             try:
                 os.unlink(tf_path)
@@ -2916,7 +2950,11 @@ def launch_api(host: str = "127.0.0.1", port: int = 8765) -> None:
     async def hash_endpoint(hash_value: str):
         if not re.match(r"^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$", hash_value):
             raise HTTPException(400, "Not a valid MD5/SHA1/SHA256 hash")
-        return analyze_hash(hash_value)
+        return rep_hash(hash_value)
+
+    @app.get("/scan/url")
+    async def url_endpoint(url: str, deep: bool = False):
+        return scan_url(url, deep=deep)
 
     @app.get("/health")
     async def health():
