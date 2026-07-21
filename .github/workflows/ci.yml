@@ -31,3 +31,6 @@ jobs:
 
       - name: Bulk / large-target scanner test (repack + sampled scan)
         run: python tests/bulk_test.py
+
+      - name: LNK shortcut + ATT&CK Navigator test
+        run: python tests/lnk_test.py

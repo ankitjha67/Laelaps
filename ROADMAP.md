@@ -19,6 +19,11 @@ Shipped since this roadmap was written (do not re-scope these):
 - **PE clustering pivots (partial)** - imphash and rich-header hash are surfaced in the
   report. Still to add from Phase 1: authentihash, telfhash (ELF), icon dhash, and TLSH/HAC-T
   clustering.
+- **LNK (Windows shortcut) analysis** (Section 9) - a pure-Python shell-link parser extracts
+  the shortcut's target and arguments, flags interpreter/LOLBin launches, encoded-PowerShell
+  and in-shortcut downloaders, and payloads smuggled in a trailing overlay.
+- **ATT&CK Navigator layer export** (Section 10) - `--attack-layer FILE` writes the aggregated
+  MITRE techniques as a Navigator layer JSON for coverage visualization.
 
 ## TL;DR
 

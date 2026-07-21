@@ -34,6 +34,7 @@ python laelaps.py <md5|sha1|sha256>            # reputation-only hash lookup
 python laelaps.py ./FitGirl-Repack/            # scan a whole download folder (see below)
 python laelaps.py huge-game-data.bin           # oversized file: fast head+tail sampled scan
 python laelaps.py <target> --offline           # never touch the network
+python laelaps.py sample.exe --attack-layer layer.json  # + write a MITRE ATT&CK Navigator layer
 python laelaps.py --api                        # REST API server (OpenAPI docs at /docs)
 python laelaps.py --ui                         # Streamlit web UI
 ```
@@ -84,7 +85,7 @@ Laelaps runs **two engines in one namespace** over every sample.
 |---|-------|-----------------|
 | 1 | Multi-hash + reputation | MD5/SHA1/SHA256/SHA512, TLSH, ssdeep, imphash → VirusTotal · MalwareBazaar · ThreatFox |
 | 2 | YARA | Built-in pack (injection, hollowing, ransom notes, Mimikatz, Log4Shell, Follina, Cobalt Strike, Meterpreter, …) + custom rules dir |
-| 3 | Format parsing | PE, ELF, Mach-O, PDF, Office/OLE, DEX/APK, scripts |
+| 3 | Format parsing | PE, ELF, Mach-O, PDF, Office/OLE, DEX/APK, scripts, LNK shortcuts |
 | 4 | Entropy & packers | Whole-file + sliding-window entropy, packer-section names, W+X sections |
 | 5 | IOC extraction | URLs, IPs, domains, BTC/ETH/XMR wallets, `.onion`, mutexes, base64 blobs, encoded PowerShell, shellcode |
 | 6 | API heuristics | Injection trio (`VirtualAllocEx`+`WriteProcessMemory`+`CreateRemoteThread`), process hollowing, keylogger APIs |
@@ -92,7 +93,7 @@ Laelaps runs **two engines in one namespace** over every sample.
 | 8 | Archives | Recursive expansion, Zip Slip, zip-bomb, password-protected refusal |
 | 9 | Steganography | Trailing data after JPEG/PNG end markers, LSB stats |
 | 10 | CVE / exploit strings | Log4Shell, Follina (MSDT), EternalBlue (MS17-010), PrintNightmare, Equation Editor, JBIG2 |
-| 11 | MITRE ATT&CK | Every indicator carries technique IDs, aggregated per report |
+| 11 | MITRE ATT&CK | Every indicator carries technique IDs, aggregated per report; export a Navigator layer with `--attack-layer FILE` |
 | 12 | LLM verdict | Optional senior-analyst summary (Claude / GPT) |
 
 ### Attribution & threat-intel engine
@@ -149,6 +150,7 @@ recognition tokens with no working payload, entrypoint, or live infrastructure.
 python3 tests/smoke_test.py     # 34 checks: one sample per detection domain end-to-end
 python3 tests/corpus_test.py    # 21 malware families attributed with correct category + UI wiring
 python3 tests/bulk_test.py      # 18 checks: repack folder scan + large-file sampled scan
+python3 tests/lnk_test.py       # 14 checks: weaponized shortcut detection + ATT&CK layer
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -164,6 +166,10 @@ python3 tests/bulk_test.py      # 18 checks: repack folder scan + large-file sam
   a big data blob with an executable overlay): asserts the installer is flagged, the readme
   stays clean, the huge blob is sampled rather than read whole, and the tree collapses to one
   malicious verdict; plus the large-file sampled path and CLI exit codes.
+- **`tests/lnk_test.py`** - inert Windows shortcuts (shell-link structure only): asserts a
+  shortcut launching an encoded PowerShell downloader is flagged, one with a trailing overlay
+  is flagged, a plain notepad shortcut stays clean, and the ATT&CK Navigator layer export is
+  well-formed.
 
 ## Important limitations (read these)
 
