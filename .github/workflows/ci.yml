@@ -37,3 +37,6 @@ jobs:
 
       - name: Archive-aware scanning test (zip + 7z expansion)
         run: python tests/archive_test.py
+
+      - name: LOLBAS / GTFOBins living-off-the-land test
+        run: python tests/lolbas_test.py

@@ -114,6 +114,7 @@ Laelaps runs **two engines in one namespace** over every sample.
 | Credential/wallet targets | Which browser, wallet, messaging, VPN, password-manager, gaming, and 2FA stores the sample references |
 | Capability profiling | 17 buckets: browser theft, cookie/session, wallet, clipper, keylog, screen, RAT, exec, persistence, evasion, AV-tamper, exfil, recon, loader, ransomware, LSASS, privesc |
 | Persistence scanner | Run keys, scheduled tasks, services, startup, Winlogon, IFEO, WMI, Defender-exclusion, firewall, backup tampering |
+| Living-off-the-land | LOLBAS/GTFOBins abuse of signed binaries (certutil download, regsvr32 squiblydoo, mshta, msbuild/installutil AWL-bypass, bitsadmin, wmic, nc/bash/curl-pipe-shell), corpus-wide with abuse context |
 | Sigma-style correlation | Multi-signal chains (collect+exfil, clipper+wallet, RAT+persistence, keylog+exfil, ransomware, LSASS, AV-tamper→C2) |
 | Family YARA pack | 25 attribution rules (used if `yara-python` is installed) |
 | URL scanner | Structure heuristics + URLhaus / VirusTotal / urlscan reputation, optional `--deep` download-and-analyze |
@@ -157,6 +158,7 @@ python3 tests/corpus_test.py    # 21 malware families attributed with correct ca
 python3 tests/bulk_test.py      # 18 checks: repack folder scan + large-file sampled scan
 python3 tests/lnk_test.py       # 14 checks: weaponized shortcut detection + ATT&CK layer
 python3 tests/archive_test.py   # 12 checks: zip + 7z expansion, nested, password-protected
+python3 tests/lolbas_test.py    # 13 checks: living-off-the-land abuse flagged, bare mentions not
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -180,6 +182,10 @@ python3 tests/archive_test.py   # 12 checks: zip + 7z expansion, nested, passwor
   installer inside): asserts the archive is expanded, the inner installer is flagged and named
   `archive::member`, a benign inner file stays clean, nested zip-in-zip is followed, and a
   password-protected archive is flagged suspicious even though its contents can't be read.
+- **`tests/lolbas_test.py`** - inert living-off-the-land command strings: asserts certutil/
+  regsvr32/msbuild/mshta/bitsadmin/wmic/nc/curl-pipe-shell abuse is flagged with the right
+  technique, a multi-LOLBin dropper is caught end-to-end, and bare mentions of the same binaries
+  in prose do not false-positive.
 
 ## Important limitations (read these)
 

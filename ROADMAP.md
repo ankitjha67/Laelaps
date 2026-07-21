@@ -28,6 +28,10 @@ Shipped since this roadmap was written (do not re-scope these):
   each member scanned in place (named `archive::member`), nested archives are followed, and
   password-protected / Zip-Slip archives are flagged even when their contents cannot be read.
   This closes the real repack gap: FitGirl-style repacks ship the installer inside a `.7z`.
+- **LOLBAS / GTFOBins living-off-the-land layer** (Section 9) - context-aware detection of abused
+  signed binaries (certutil download, regsvr32 squiblydoo, mshta, msbuild/installutil AWL-bypass,
+  bitsadmin, wmic, nc/bash/curl-pipe-shell) mapped to ATT&CK, applied corpus-wide so it catches
+  LOLBin commands embedded in a PE, macro, LNK or document, not only in files parsed as scripts.
 
 ## TL;DR
 
