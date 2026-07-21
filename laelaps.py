@@ -299,6 +299,8 @@ def compute_hashes(data: bytes) -> Dict[str, str]:
 
 MAGIC_SIGNATURES = {
     b"\x4c\x00\x00\x00\x01\x14\x02\x00": "Windows shortcut (LNK)",
+    b"\xe4\x52\x5c\x7b\x8c\xd8\xa7\x4d\xae\xb1\x53\x78\xd0\x29\x96\xd3": "OneNote document",
+    b"\xa1\x2f\xff\x43\xd9\xef\x76\x4c\x9e\xe2\x10\xea\x57\x22\x76\x5f": "OneNote document",
     b"MZ": "PE (Windows Executable)",
     b"\x7fELF": "ELF (Linux Executable)",
     b"\xfe\xed\xfa\xce": "Mach-O 32-bit",
@@ -364,6 +366,7 @@ def detect_filetype(data: bytes, filepath: str) -> str:
         ".js": "JavaScript",
         ".hta": "HTML Application",
         ".lnk": "Windows shortcut",
+        ".one": "OneNote document", ".onetoc2": "OneNote document",
         ".chm": "Compiled HTML Help",
         ".rtf": "Rich Text Format",
         ".doc": "MS Word (legacy)",
@@ -1612,6 +1615,71 @@ def analyze_lnk(data: bytes) -> List[Indicator]:
     return indicators
 
 
+# ==============================================================================
+# LAYER 11c: ONENOTE (.one) EMBEDDED-FILE EXTRACTION
+# ==============================================================================
+# OneNote documents can embed arbitrary files, and a lure image tells the victim
+# to "double-click to open" - which runs the embedded .bat/.vbs/.ps1/.exe. This was
+# a dominant initial-access vector in 2023-2024. Parse the FileDataStoreObject
+# structures (MS-ONESTORE) and flag embedded executables and scripts.
+
+_ONENOTE_FDSO_HDR = b"\xe7\x16\xe3\xbd\x65\x26\x11\x45\xa4\xc4\x8d\x4d\x0b\x7a\x9e\xac"
+_ONENOTE_SCRIPT_MARKERS = (
+    "powershell", "cmd.exe", "cmd /c", "cmd/c", "wscript", "cscript", "certutil",
+    "bitsadmin", "mshta", "createobject", "-enc", "iex", "invoke-", "start-process",
+    "shell.application", "system.net.webclient", "downloadstring", "downloadfile",
+    "regsvr32", "rundll32", "@echo off", "curl ", "wget ")
+
+
+def analyze_onenote(data: bytes) -> List[Indicator]:
+    """Extract files embedded in a OneNote document and flag executable/script payloads."""
+    indicators: List[Indicator] = []
+    embedded: List[bytes] = []
+    start = 0
+    while len(embedded) < 100:
+        i = data.find(_ONENOTE_FDSO_HDR, start)
+        if i == -1:
+            break
+        start = i + 16
+        try:
+            cb = struct.unpack_from("<Q", data, i + 16)[0]
+        except Exception:
+            continue
+        if 0 < cb <= 50_000_000:
+            fdata = data[i + 36:i + 36 + cb]
+            if fdata:
+                embedded.append(fdata)
+    if not embedded:
+        return indicators
+
+    indicators.append(Indicator(
+        layer="onenote", category="suspicious", severity="medium",
+        title=f"OneNote contains {len(embedded)} embedded file(s)",
+        detail="OneNote documents that embed files are a known phishing delivery vector: the lure "
+               "image tells the victim to double-click, which runs the embedded payload.",
+        confidence=0.5, mitre_attack=["T1204.002"]))
+
+    for fdata in embedded:
+        if fdata[:2] == b"MZ":
+            indicators.append(Indicator(
+                layer="onenote", category="malicious", severity="critical",
+                title="OneNote embeds a Windows executable",
+                detail="An embedded PE (.exe/.dll) inside a OneNote document - a double-click-to-run lure.",
+                confidence=0.9, mitre_attack=["T1204.002", "T1027.006"]))
+            continue
+        try:
+            txt = fdata[:8000].decode("utf-8", "ignore").lower()
+        except Exception:
+            txt = ""
+        if any(k in txt for k in _ONENOTE_SCRIPT_MARKERS):
+            indicators.append(Indicator(
+                layer="onenote", category="malicious", severity="critical",
+                title="OneNote embeds a script payload",
+                detail=f"Embedded script content: {txt.strip()[:140]}",
+                confidence=0.85, mitre_attack=["T1204.002", "T1059"]))
+    return indicators
+
+
 def analyze_apk(data: bytes, filepath: str) -> List[Indicator]:
     """Basic APK triage - permissions, embedded native libs, DEX."""
     indicators = []
@@ -2695,6 +2763,10 @@ def analyze_file(
         if "shortcut" in verdict.filetype.lower():
             all_indicators.extend(analyze_lnk(data))
 
+        # Layer 11c: OneNote (.one)
+        if "OneNote" in verdict.filetype:
+            all_indicators.extend(analyze_onenote(data))
+
         # Layer 12: Archives (recursive)
         if "ZIP" in verdict.filetype or "OOXML" in verdict.filetype or "APK" in verdict.filetype:
             arch_ind, inner = analyze_archive(data)
@@ -3391,6 +3463,8 @@ def v2_extract_strings(data: bytes, min_len: int = 4) -> List[str]:
 
 MAGIC = {
     b"\x4c\x00\x00\x00\x01\x14\x02\x00": "Windows shortcut (LNK)",
+    b"\xe4\x52\x5c\x7b\x8c\xd8\xa7\x4d\xae\xb1\x53\x78\xd0\x29\x96\xd3": "OneNote document",
+    b"\xa1\x2f\xff\x43\xd9\xef\x76\x4c\x9e\xe2\x10\xea\x57\x22\x76\x5f": "OneNote document",
     b"MZ": "PE (Windows executable)",
     b"\x7fELF": "ELF (Linux executable)",
     b"\xfe\xed\xfa\xce": "Mach-O",
@@ -3430,6 +3504,7 @@ def v2_detect_filetype(data: bytes, path: str) -> str:
         ".hta": "HTML application", ".bat": "Batch script", ".cmd": "Batch script",
         ".sh": "Shell script", ".py": "Python script", ".jar": "Java archive",
         ".asar": "asar (Electron archive)", ".lnk": "Windows shortcut",
+        ".one": "OneNote document", ".onetoc2": "OneNote document",
     }.get(ext, "Unknown / binary")
 
 

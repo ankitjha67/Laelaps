@@ -93,7 +93,7 @@ Laelaps runs **two engines in one namespace** over every sample.
 |---|-------|-----------------|
 | 1 | Multi-hash + reputation | MD5/SHA1/SHA256/SHA512, TLSH, ssdeep, imphash, rich-header hash, authentihash, elf_symhash, icon perceptual-hash → VirusTotal · MalwareBazaar · ThreatFox |
 | 2 | YARA | Built-in pack (injection, hollowing, ransom notes, Mimikatz, Log4Shell, Follina, Cobalt Strike, Meterpreter, …) + custom rules dir |
-| 3 | Format parsing | PE, ELF, Mach-O, PDF, Office/OLE, DEX/APK, scripts, LNK shortcuts |
+| 3 | Format parsing | PE, ELF, Mach-O, PDF, Office/OLE, DEX/APK, scripts, LNK shortcuts, OneNote (.one) |
 | 4 | Entropy & packers | Whole-file + sliding-window entropy, packer-section names, W+X sections |
 | 5 | IOC extraction | URLs, IPs, domains, BTC/ETH/XMR wallets, `.onion`, mutexes, base64 blobs, encoded PowerShell, shellcode |
 | 6 | API heuristics | Injection trio (`VirtualAllocEx`+`WriteProcessMemory`+`CreateRemoteThread`), process hollowing, keylogger APIs |
@@ -164,6 +164,7 @@ python3 tests/archive_test.py   # 12 checks: zip + 7z expansion, nested, passwor
 python3 tests/lolbas_test.py    # 13 checks: living-off-the-land abuse flagged, bare mentions not
 python3 tests/icon_test.py      # 13 checks: perceptual icon hash, .ico rebuild, icon-reuse
 python3 tests/hashpivot_test.py # 13 checks: authentihash skip-logic + elf_symhash on real ELFs
+python3 tests/onenote_test.py   # 12 checks: OneNote embedded exe/script extraction
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -199,6 +200,10 @@ python3 tests/hashpivot_test.py # 13 checks: authentihash skip-logic + elf_symha
   checksum / security directory / certificate leaves the hash unchanged, changing code does not),
   graceful `None` on non-PE input, and elf_symhash computed against real system ELF binaries
   (deterministic, distinct per binary, surfaced in the report).
+- **`tests/onenote_test.py`** - inert OneNote documents (valid MS-ONESTORE structure, EICAR-style
+  embedded payloads): asserts an embedded executable and an embedded script are both flagged, the
+  file is detected by GUID magic even without a `.one` extension, a benign embedded picture is not
+  flagged as a payload, and an empty OneNote stays clean.
 
 ## Important limitations (read these)
 

@@ -46,3 +46,6 @@ jobs:
 
       - name: Clustering-hash test (authentihash + elf_symhash)
         run: python tests/hashpivot_test.py
+
+      - name: OneNote embedded-file extraction test
+        run: python tests/onenote_test.py
