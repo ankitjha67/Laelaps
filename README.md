@@ -95,7 +95,7 @@ Laelaps runs **two engines in one namespace** over every sample.
 | 2 | YARA | Built-in pack (injection, hollowing, ransom notes, Mimikatz, Log4Shell, Follina, Cobalt Strike, Meterpreter, …) + custom rules dir |
 | 3 | Format parsing | PE, ELF, Mach-O, PDF, Office/OLE, DEX/APK, scripts, LNK shortcuts, OneNote (.one) |
 | 4 | Entropy & packers | Whole-file + sliding-window entropy, packer-section names, W+X sections |
-| 5 | IOC extraction | URLs, IPs, domains, BTC/ETH/XMR wallets, `.onion`, mutexes, base64 blobs, encoded PowerShell, shellcode |
+| 5 | IOC extraction | URLs, IPs, domains, BTC/ETH/XMR wallets, `.onion`, mutexes, base64 blobs, encoded PowerShell, shellcode; refangs defanged IOCs (`hxxp://`, `1.2.3[.]4`, `evil[.]com`) |
 | 6 | API heuristics | Injection trio (`VirtualAllocEx`+`WriteProcessMemory`+`CreateRemoteThread`), process hollowing, keylogger APIs |
 | 7 | Macro / script | VBA + XLM 4.0 macros, PDF JavaScript/Launch, PowerShell decode (base64/`-enc`), VBS/JS/Bash/Batch |
 | 8 | Archives | Recursive expansion, Zip Slip, zip-bomb, password-protected refusal |
@@ -165,6 +165,7 @@ python3 tests/lolbas_test.py    # 13 checks: living-off-the-land abuse flagged, 
 python3 tests/icon_test.py      # 13 checks: perceptual icon hash, .ico rebuild, icon-reuse
 python3 tests/hashpivot_test.py # 13 checks: authentihash skip-logic + elf_symhash on real ELFs
 python3 tests/onenote_test.py   # 12 checks: OneNote embedded exe/script extraction
+python3 tests/defang_test.py    # 15 checks: refang defanged IOCs + reference triage
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -204,6 +205,10 @@ python3 tests/onenote_test.py   # 12 checks: OneNote embedded exe/script extract
   embedded payloads): asserts an embedded executable and an embedded script are both flagged, the
   file is detected by GUID magic even without a `.one` extension, a benign embedded picture is not
   flagged as a payload, and an empty OneNote stays clean.
+- **`tests/defang_test.py`** - IOC defanging: `refang` restores `hxxp://` / `[.]` / `[@]` / `[dot]`
+  forms, defanged IOCs are extracted, a pasted threat-intel report (dense with defanged IOCs) is
+  triaged as reference content (not called malicious) while its IOCs are still surfaced, and real
+  malware with genuine IOCs is not falsely dampened.
 
 ## Important limitations (read these)
 

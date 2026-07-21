@@ -42,6 +42,9 @@ Shipped since this roadmap was written (do not re-scope these):
 - **OneNote (.one) embedded-file extraction** (Section 9) - detects OneNote by GUID magic, parses
   the MS-ONESTORE FileDataStoreObject structures, and flags embedded executables and scripts (the
   double-click-to-run lure that was a dominant initial-access vector in 2023-2024).
+- **IOC defanging / refang** (Section 10) - restores defanged IOCs (hxxp://, 1.2.3[.]4, evil[.]com,
+  user[@]host) so they are still extracted from threat-intel, and uses a density of defanged
+  markers as a tell that a file is reference/analysis content (dampened, not called malware).
 
 ## TL;DR
 

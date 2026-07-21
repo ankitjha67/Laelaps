@@ -49,3 +49,6 @@ jobs:
 
       - name: OneNote embedded-file extraction test
         run: python tests/onenote_test.py
+
+      - name: IOC defanging test (refang + reference triage)
+        run: python tests/defang_test.py

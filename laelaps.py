@@ -3537,8 +3537,37 @@ def _plausible_domain(d: str) -> bool:
     return tld.isalpha() and (2 <= len(tld) <= 24) and tld not in _NONTLD
 
 
+# defanged IOCs (hxxp://, 1.2.3[.]4, evil[.]com, user[@]host) appear in threat-intel
+# reports and detection rules. refang() restores them so they are still extractable, and
+# their presence is itself a strong tell that a file is reference/analysis content, not
+# operational malware (real malware does not defang its own C2).
+_DEFANG_SUBS = [
+    (re.compile(r"h[x]{2}p(s?)://", re.I), r"http\1://"),
+    (re.compile(r"\bfxp://", re.I), "ftp://"),
+    (re.compile(r"\[://\]"), "://"),
+    (re.compile(r"[\[\(\{]\s*\.\s*[\]\)\}]"), "."),          # [.] (.) {.}
+    (re.compile(r"[\[\(\{]\s*dot\s*[\]\)\}]", re.I), "."),   # [dot]
+    (re.compile(r"[\[\(\{]\s*@\s*[\]\)\}]"), "@"),           # [@] (@)
+    (re.compile(r"[\[\(\{]\s*at\s*[\]\)\}]", re.I), "@"),    # [at]
+    (re.compile(r"[\[\(\{]\s*:\s*[\]\)\}]"), ":"),           # [:]
+    (re.compile(r"[\[\(\{]\s*//\s*[\]\)\}]"), "//"),         # [//]
+]
+
+
+def refang(text: str) -> str:
+    """Restore defanged IOCs (hxxp://, [.], [@], [dot], ...) to their real form."""
+    for rx, repl in _DEFANG_SUBS:
+        text = rx.sub(repl, text)
+    return text
+
+
+def count_defanged(text: str) -> int:
+    """Count defanged-IOC markers (a tell of threat-intel / reference content)."""
+    return sum(len(rx.findall(text)) for rx, _ in _DEFANG_SUBS)
+
+
 def v2_extract_iocs(strings: List[str]) -> Dict[str, List[str]]:
-    text = "\n".join(strings)
+    text = refang("\n".join(strings))   # capture defanged IOCs from threat-intel too
     out: Dict[str, List[str]] = {}
     for name, rx in IOC_RE.items():
         vals = sorted(set(rx.findall(text)))
@@ -4745,9 +4774,12 @@ def looks_like_analysis_content(corpus_lc: str, filetype: str, data: bytes) -> T
                 if w in corpus_lc)
     if vocab >= 3:
         reasons.append("dense threat-intel / detection vocabulary")
-    # strong = a ruleset (YARA) OR a threat-intel writeup (many technique IDs + vocab).
-    # Ordinary malicious scripts (.ps1/.js/.py stealers) have none of these.
-    strong = yara_rules or (mitre_ids >= 5 and vocab >= 3)
+    defanged = count_defanged(corpus_lc)
+    if defanged >= 3:
+        reasons.append(f"{defanged} defanged IOC(s) (hxxp:// / [.] / [@]) - a threat-intel tell")
+    # strong = a ruleset (YARA) OR a threat-intel writeup (technique IDs + vocab, or many
+    # defanged IOCs). Ordinary malicious scripts (.ps1/.js/.py stealers) have none of these.
+    strong = yara_rules or (mitre_ids >= 5 and vocab >= 3) or defanged >= 4
     return (strong, "; ".join(reasons)) if strong else (False, "")
 
 # ==============================================================================
