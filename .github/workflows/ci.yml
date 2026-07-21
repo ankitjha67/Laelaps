@@ -43,3 +43,6 @@ jobs:
 
       - name: Icon perceptual-hash test (fake-installer / icon reuse)
         run: python tests/icon_test.py
+
+      - name: Clustering-hash test (authentihash + elf_symhash)
+        run: python tests/hashpivot_test.py

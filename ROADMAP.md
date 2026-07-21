@@ -17,7 +17,11 @@ Shipped since this roadmap was written (do not re-scope these):
   collapses to one aggregate verdict that names the offending file. Includes
   embedded-executable-overlay detection for droppers hidden inside data blobs.
 - **PE clustering pivots (partial)** - imphash and rich-header hash are surfaced in the
-  report. Still to add from Phase 1: authentihash, telfhash (ELF), and TLSH/HAC-T clustering.
+  report. Still to add from Phase 1: TLSH/HAC-T corpus clustering.
+- **authentihash + ELF symbol hash** (Section 3) - authentihash (the Authenticode code hash,
+  computed with the checksum and signature excluded, so a re-signed crack still matches) and
+  elf_symhash (imphash analog for ELF: md5 of the sorted imported symbol names, a telfhash-style
+  clustering pivot for Linux/IoT malware), both surfaced in the report hashes.
 - **Icon perceptual-hashing** (Section 3) - a dhash of each file's icon (extracted from PE
   resources or a standalone image), surfaced as `icon_dhash` and used in bulk scans to cluster
   files that share an icon - catching fake installers that reuse a brand/game icon and droppers

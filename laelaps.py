@@ -167,6 +167,11 @@ def get_lief():
     global _lief
     if _lief is None:
         _lief = _ensure("lief")
+        if _lief is not None:
+            try:
+                _lief.logging.disable()   # silence lief's stderr chatter on malformed input
+            except Exception:
+                pass
     return _lief
 
 def get_androguard():
@@ -881,6 +886,9 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
                 meta["rich_header_hash"] = rich
         except Exception:
             pass
+        ah = pe_authentihash(data)   # signature-independent code hash
+        if ah:
+            meta["authentihash"] = ah
 
         # API-combo heuristics
         if INJECTION_TRIO.issubset(imported_apis):
@@ -1975,6 +1983,68 @@ def file_icon_dhash(data: bytes, filetype: str) -> Optional[str]:
 
 
 # ==============================================================================
+# LAYER 13c: CLUSTERING HASHES (authentihash for PE, symbol hash for ELF)
+# ==============================================================================
+# authentihash is the Authenticode hash: the PE with its checksum and signature
+# excluded, so the SAME code re-signed with a different certificate still matches
+# (catches re-signed cracks/malware). elf_symhash is the imphash analog for ELF -
+# an md5 of the sorted imported symbol names, for clustering Linux/IoT malware.
+
+def _authentihash_core(data: bytes, checksum_off: int, sec_entry_off: int,
+                       cert_off: int, cert_size: int, algo: str = "sha256") -> str:
+    """Authenticode hash given the byte offsets to exclude (pure, testable)."""
+    h = hashlib.new(algo)
+    h.update(data[:checksum_off])                    # start .. CheckSum field
+    h.update(data[checksum_off + 4:sec_entry_off])   # skip 4-byte CheckSum .. Security dir entry
+    if cert_off and cert_size:
+        h.update(data[sec_entry_off + 8:cert_off])   # skip 8-byte Security entry .. cert table
+        h.update(data[cert_off + cert_size:])        # skip cert table, hash any trailing overlay
+    else:
+        h.update(data[sec_entry_off + 8:])           # unsigned: hash the remainder
+    return h.hexdigest()
+
+
+def pe_authentihash(data: bytes) -> Optional[str]:
+    """SHA-256 authentihash of a PE (signature-independent code hash), or None."""
+    pe_mod = get_pefile()
+    if not pe_mod or data[:2] != b"MZ":
+        return None
+    pe = None
+    try:
+        pe = pe_mod.PE(data=data, fast_load=True)
+        checksum_off = pe.OPTIONAL_HEADER.get_file_offset() + 64   # CheckSum is at OH+0x40
+        sec = pe.OPTIONAL_HEADER.DATA_DIRECTORY[4]                 # IMAGE_DIRECTORY_ENTRY_SECURITY
+        return _authentihash_core(data, checksum_off, sec.get_file_offset(),
+                                  sec.VirtualAddress, sec.Size)
+    except Exception:
+        return None
+    finally:
+        if pe is not None:
+            try:
+                pe.close()
+            except Exception:
+                pass
+
+
+def elf_symhash(data: bytes) -> Optional[str]:
+    """imphash analog for ELF: md5 of the sorted, normalized imported symbol names
+    (a telfhash-style clustering pivot for Linux/IoT malware). Uses lief."""
+    lief = get_lief()
+    if not lief or data[:4] != b"\x7fELF":
+        return None
+    try:
+        binary = lief.parse(list(data))
+        if binary is None:
+            return None
+        names = sorted({(s.name or "").lower() for s in binary.imported_symbols if s.name})
+        if not names:
+            return None
+        return hashlib.md5(",".join(names).encode()).hexdigest()
+    except Exception:
+        return None
+
+
+# ==============================================================================
 # LAYER 14: YARA MATCHING
 # ==============================================================================
 
@@ -2585,11 +2655,16 @@ def analyze_file(
                 verdict.hashes["imphash"] = pe_meta["imphash"]
             if "rich_header_hash" in pe_meta:
                 verdict.hashes["rich_header_hash"] = pe_meta["rich_header_hash"]
+            if "authentihash" in pe_meta:
+                verdict.hashes["authentihash"] = pe_meta["authentihash"]
 
         # Layer 7: ELF
         if verdict.filetype.startswith("ELF"):
             elf_ind, _ = analyze_elf(data)
             all_indicators.extend(elf_ind)
+            esym = elf_symhash(data)
+            if esym:
+                verdict.hashes["elf_symhash"] = esym
 
         # Layer 8: Office
         if any(x in verdict.filetype for x in ("Office", "OOXML", "OLE", "Word", "Excel", "PowerPoint")):
@@ -4882,7 +4957,7 @@ def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optiona
                                       confidence=ind.confidence, mitre=ind.mitre_attack))
         for k, v in (deep.reputation or {}).items():
             rep.reputation[k] = v
-        for hk in ("imphash", "rich_header_hash"):   # PE clustering pivots
+        for hk in ("imphash", "rich_header_hash", "authentihash", "elf_symhash"):  # clustering pivots
             if hk in deep.hashes:
                 rep.hashes[hk] = deep.hashes[hk]
     except Exception as e:
