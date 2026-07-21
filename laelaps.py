@@ -293,6 +293,7 @@ def compute_hashes(data: bytes) -> Dict[str, str]:
 # ==============================================================================
 
 MAGIC_SIGNATURES = {
+    b"\x4c\x00\x00\x00\x01\x14\x02\x00": "Windows shortcut (LNK)",
     b"MZ": "PE (Windows Executable)",
     b"\x7fELF": "ELF (Linux Executable)",
     b"\xfe\xed\xfa\xce": "Mach-O 32-bit",
@@ -1486,6 +1487,123 @@ DANGEROUS_ANDROID_PERMISSIONS = {
 }
 
 
+# ==============================================================================
+# LAYER 11b: LNK (WINDOWS SHORTCUT) ANALYSIS
+# ==============================================================================
+# Weaponized .lnk files are a dominant initial-access vector (post-macro-blocking):
+# a shortcut that quietly launches PowerShell/cmd/mshta/rundll32 to fetch and run a
+# payload. This parses the Shell Link Binary structure (MS-SHLLINK) and surfaces the
+# command the shortcut actually runs, plus any payload smuggled in a trailing overlay.
+
+_LNK_LOLBINS = {
+    "powershell": ("PowerShell", ["T1059.001"]),
+    "cmd.exe": ("cmd", ["T1059.003"]),
+    "mshta": ("mshta / HTA execution", ["T1218.005"]),
+    "rundll32": ("rundll32", ["T1218.011"]),
+    "regsvr32": ("regsvr32 (squiblydoo)", ["T1218.010"]),
+    "certutil": ("certutil download", ["T1105"]),
+    "bitsadmin": ("bitsadmin transfer", ["T1197"]),
+    "wscript": ("WScript", ["T1059.005"]),
+    "cscript": ("CScript", ["T1059.005"]),
+    "msbuild": ("MSBuild", ["T1127.001"]),
+    "installutil": ("InstallUtil", ["T1218.004"]),
+    "regasm": ("RegAsm", ["T1218.009"]),
+    "regsvcs": ("RegSvcs", ["T1218.009"]),
+    "msiexec": ("msiexec", ["T1218.007"]),
+    "curl": ("curl download", ["T1105"]),
+    "wmic": ("wmic", ["T1047"]),
+    "forfiles": ("forfiles proxy exec", ["T1059"]),
+    "conhost": ("conhost proxy", ["T1059"]),
+}
+
+
+def _lnk_strings(data: bytes) -> Dict[str, Any]:
+    """Best-effort parse of a Windows Shell Link (.lnk); return its StringData fields."""
+    out: Dict[str, Any] = {}
+    if len(data) < 76 or data[:4] != b"\x4c\x00\x00\x00":
+        return out
+    try:
+        flags = struct.unpack_from("<I", data, 20)[0]
+        HAS_IDLIST, HAS_LINKINFO = 0x01, 0x02
+        HAS_NAME, HAS_RELPATH, HAS_WORKDIR, HAS_ARGS, HAS_ICON = 0x04, 0x08, 0x10, 0x20, 0x40
+        IS_UNICODE = 0x80
+        off = 76
+        if flags & HAS_IDLIST:
+            off += 2 + struct.unpack_from("<H", data, off)[0]
+        if flags & HAS_LINKINFO:
+            off += struct.unpack_from("<I", data, off)[0]
+        unicode_str = bool(flags & IS_UNICODE)
+        for name, bit in (("name", HAS_NAME), ("relative_path", HAS_RELPATH),
+                          ("working_dir", HAS_WORKDIR), ("arguments", HAS_ARGS),
+                          ("icon_location", HAS_ICON)):
+            if flags & bit:
+                count = struct.unpack_from("<H", data, off)[0]
+                off += 2
+                nbytes = count * (2 if unicode_str else 1)
+                raw = data[off:off + nbytes]
+                off += nbytes
+                out[name] = raw.decode("utf-16-le" if unicode_str else "latin-1", "ignore")
+        out["_end_offset"] = off
+    except Exception:
+        pass
+    return out
+
+
+def analyze_lnk(data: bytes) -> List[Indicator]:
+    """Analyze a Windows shortcut for weaponization."""
+    indicators: List[Indicator] = []
+    fields = _lnk_strings(data)
+    if not fields:
+        return indicators
+    cmd = " ".join(str(fields.get(k, "")) for k in
+                   ("name", "relative_path", "working_dir", "arguments", "icon_location"))
+    cmd_lc = cmd.lower()
+    indicators.append(Indicator(
+        layer="lnk", category="informational", severity="info",
+        title="Windows shortcut (.lnk) parsed",
+        detail=f"target: {fields.get('relative_path', '?')[:120]} | "
+               f"args: {fields.get('arguments', '')[:180]}",
+        confidence=0.3))
+
+    hits = [(label, mitre) for tok, (label, mitre) in _LNK_LOLBINS.items() if tok in cmd_lc]
+    if hits:
+        allm = sorted({m for _, ms in hits for m in ms})
+        indicators.append(Indicator(
+            layer="lnk", category="malicious", severity="high",
+            title="Shortcut launches an interpreter / LOLBin",
+            detail="This .lnk launches: " + ", ".join(l for l, _ in hits)
+                   + ". Shortcuts that spawn interpreters are a top initial-access technique.",
+            evidence=cmd[:200], mitre_attack=allm, confidence=0.85))
+
+    for pat, desc, sev, mitre in (
+        (r"-enc(odedcommand)?\b|frombase64string", "encoded PowerShell / base64 command",
+         "critical", ["T1027", "T1059.001"]),
+        (r"downloadstring|downloadfile|invoke-webrequest|\biwr\b|urlcache|-urlcache",
+         "in-shortcut downloader", "critical", ["T1105"]),
+        (r"iex\b|invoke-expression", "Invoke-Expression execution", "high", ["T1059.001"]),
+        (r"-w(indowstyle)?\s*hidden|-nop\b|-noprofile|-noni", "stealth PowerShell flags",
+         "high", ["T1564.003"]),
+        (r"https?://|\\\\[a-z0-9.$_-]+\\", "remote payload reference", "high", ["T1105"]),
+    ):
+        if re.search(pat, cmd_lc):
+            indicators.append(Indicator(
+                layer="lnk", category="malicious", severity=sev,
+                title=f"Malicious shortcut argument: {desc}", detail=cmd[:220],
+                mitre_attack=mitre, confidence=0.85 if sev == "critical" else 0.75))
+
+    end = fields.get("_end_offset")
+    if isinstance(end, int) and len(data) - end > 2048:
+        overlay = data[end:]
+        ent = shannon_entropy(overlay)
+        indicators.append(Indicator(
+            layer="lnk", category="suspicious", severity="high" if ent > 7 else "medium",
+            title=f"Trailing data after the shortcut structure ({len(overlay)} bytes)",
+            detail=f"Overlay entropy {ent:.2f}/8.0. A .lnk with a large appended blob often "
+                   "smuggles the payload it drops.",
+            mitre_attack=["T1027"], confidence=0.7 if ent > 7 else 0.5))
+    return indicators
+
+
 def analyze_apk(data: bytes, filepath: str) -> List[Indicator]:
     """Basic APK triage - permissions, embedded native libs, DEX."""
     indicators = []
@@ -2383,6 +2501,10 @@ def analyze_file(
         if "APK" in verdict.filetype:
             all_indicators.extend(analyze_apk(data, filepath))
 
+        # Layer 11b: LNK (Windows shortcut)
+        if "shortcut" in verdict.filetype.lower():
+            all_indicators.extend(analyze_lnk(data))
+
         # Layer 12: Archives (recursive)
         if "ZIP" in verdict.filetype or "OOXML" in verdict.filetype or "APK" in verdict.filetype:
             arch_ind, inner = analyze_archive(data)
@@ -3078,6 +3200,7 @@ def v2_extract_strings(data: bytes, min_len: int = 4) -> List[str]:
 
 
 MAGIC = {
+    b"\x4c\x00\x00\x00\x01\x14\x02\x00": "Windows shortcut (LNK)",
     b"MZ": "PE (Windows executable)",
     b"\x7fELF": "ELF (Linux executable)",
     b"\xfe\xed\xfa\xce": "Mach-O",
@@ -4959,6 +5082,24 @@ def render_url(res: Dict[str, Any]) -> None:
           "safety. Enable network reputation (URLhaus/VT/urlscan) and use --deep in a sandbox to confirm.*")
 
 
+def attack_navigator_layer(techniques: List[str], name: str = "Laelaps",
+                           description: str = "") -> Dict[str, Any]:
+    """Build a MITRE ATT&CK Navigator layer (schema 4.5) from observed technique IDs,
+    ready to load at mitre-attack.github.io/attack-navigator for coverage visualization."""
+    techs = sorted({t for t in techniques if re.match(r"^T\d{4}", t)})
+    return {
+        "name": name[:120],
+        "versions": {"attack": "15", "navigator": "4.9.5", "layer": "4.5"},
+        "domain": "enterprise-attack",
+        "description": description or "Techniques observed by Laelaps static analysis.",
+        "techniques": [{"techniqueID": t, "score": 1, "color": "#e60d0d",
+                        "comment": "observed", "enabled": True} for t in techs],
+        "gradient": {"colors": ["#ffffff", "#e60d0d"], "minValue": 0, "maxValue": 1},
+        "legendItems": [{"label": "observed by Laelaps", "color": "#e60d0d"}],
+        "hideDisabled": True,
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         prog="laelaps",
@@ -4986,6 +5127,8 @@ def main() -> int:
                     help="stop a directory scan at the first malicious file (fast go/no-go)")
     ap.add_argument("--full-hash", action="store_true",
                     help="compute a true streaming SHA-256 for large sampled files (slower)")
+    ap.add_argument("--attack-layer", metavar="FILE",
+                    help="write a MITRE ATT&CK Navigator layer JSON for the scan (single-file target)")
     ap.add_argument("--api", action="store_true", help="launch the REST API server instead of scanning")
     ap.add_argument("--api-host", default="127.0.0.1")
     ap.add_argument("--api-port", type=int, default=8765)
@@ -5039,6 +5182,9 @@ def main() -> int:
             print(json.dumps(bulk.to_dict(), indent=2, default=str))
         else:
             render_bulk(bulk)
+        if args.attack_layer:
+            print("note: --attack-layer applies to single-file scans; skipped for a directory",
+                  file=sys.stderr)
         return 1 if bulk.verdict in ("malicious", "suspicious") else 0
 
     if not os.path.isfile(args.target):
@@ -5051,6 +5197,11 @@ def main() -> int:
     else:
         rep = analyze_file_v2(args.target, use_llm=not args.no_llm,
                               yara_rules_dir=args.yara_rules, recursive_depth=args.recursive)
+    if args.attack_layer:
+        with open(args.attack_layer, "w", encoding="utf-8") as fh:
+            json.dump(attack_navigator_layer(rep.mitre, name=f"Laelaps - {rep.filename}"),
+                      fh, indent=2)
+        print(f"[ATT&CK Navigator layer written to {args.attack_layer}]", file=sys.stderr)
     if args.json:
         print(json.dumps(rep.to_dict(), indent=2, default=str))
     elif args.report:
