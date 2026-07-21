@@ -867,11 +867,17 @@ def analyze_pe(data: bytes) -> Tuple[List[Indicator], Dict[str, Any]]:
         meta["imported_dlls"] = imported_dlls
         meta["imported_api_count"] = len(imported_apis)
 
-        # imphash for family clustering
+        # imphash + rich-header hash for family/toolkit clustering (retrohunt pivots)
         try:
             imphash = pe.get_imphash()
             if imphash:
                 meta["imphash"] = imphash
+        except Exception:
+            pass
+        try:
+            rich = pe.get_rich_header_hash()
+            if rich:
+                meta["rich_header_hash"] = rich
         except Exception:
             pass
 
@@ -2344,6 +2350,8 @@ def analyze_file(
             all_indicators.extend(pe_ind)
             if "imphash" in pe_meta:
                 verdict.hashes["imphash"] = pe_meta["imphash"]
+            if "rich_header_hash" in pe_meta:
+                verdict.hashes["rich_header_hash"] = pe_meta["rich_header_hash"]
 
         # Layer 7: ELF
         if verdict.filetype.startswith("ELF"):
@@ -4455,31 +4463,17 @@ def generate_report(r: "V2Report") -> str:
 # ==============================================================================
 # ORCHESTRATOR
 # ==============================================================================
-def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optional[str] = None, recursive_depth: int = 1) -> V2Report:
-    start = time.time()
-    filepath = os.path.abspath(filepath)
-    data = read_bytes(filepath)
-    strings = v2_extract_strings(data)
-    corpus_raw = "\n".join(strings)
-    corpus_lc = corpus_raw.lower()
-    iocs = v2_extract_iocs(strings)
-
-    rep = V2Report(filepath=filepath, filename=os.path.basename(filepath), size_bytes=len(data),
-                   filetype=v2_detect_filetype(data, filepath), hashes=v2_compute_hashes(data),
-                   verdict="unknown", score=0.0,
-                   timestamp=datetime.now(timezone.utc).isoformat())
-    if not data:
-        rep.notes.append("file is empty")
-        return rep
-
+def _run_v2_engines(rep: V2Report, data: bytes, corpus_lc: str, corpus_raw: str,
+                    iocs: Dict[str, List[str]]) -> Tuple[List[Signal], List["FamilyMatch"]]:
+    """Run the v2 attribution/behavior engines over `data` and populate `rep`'s
+    engine fields. Shared by the full-file and the sampled (large-file) analyzers."""
     signals: List[Signal] = []
 
-    # engines
     loaders, loader_sigs = detect_loaders(corpus_lc, data)
     signals += loader_sigs
     rep.loaders = loaders
 
-    is_electron, elc_sigs, elc_info = analyze_electron(data, corpus_lc)
+    is_electron, elc_sigs, _elc_info = analyze_electron(data, corpus_lc)
     signals += elc_sigs
 
     is_dotnet, net_sigs = analyze_dotnet(data, corpus_lc)
@@ -4528,6 +4522,37 @@ def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optiona
                               title=f"Family attribution: {f.family} ({int(f.confidence*100)}%)",
                               detail=f.description, confidence=f.confidence))
 
+    # executable smuggled inside a non-executable file (overlay / dropper / polyglot)
+    tail_region = data[-8192:] if len(data) > 8192 else data
+    if (b"This program cannot be run in DOS mode" in data or b"\x7fELF" in tail_region) \
+            and not rep.filetype.startswith(("PE", "ELF", "Mach-O")):
+        signals.append(Signal(engine="embedded", severity="high",
+                              title="Embedded executable inside a non-executable file",
+                              detail="A Windows/Linux executable image was found inside a non-executable "
+                                     "file - classic overlay/dropper/polyglot smuggling. Do not run it.",
+                              confidence=0.75, mitre=["T1027.009"]))
+    return signals, families
+
+
+def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optional[str] = None, recursive_depth: int = 1) -> V2Report:
+    start = time.time()
+    filepath = os.path.abspath(filepath)
+    data = read_bytes(filepath)
+    strings = v2_extract_strings(data)
+    corpus_raw = "\n".join(strings)
+    corpus_lc = corpus_raw.lower()
+    iocs = v2_extract_iocs(strings)
+
+    rep = V2Report(filepath=filepath, filename=os.path.basename(filepath), size_bytes=len(data),
+                   filetype=v2_detect_filetype(data, filepath), hashes=v2_compute_hashes(data),
+                   verdict="unknown", score=0.0,
+                   timestamp=datetime.now(timezone.utc).isoformat())
+    if not data:
+        rep.notes.append("file is empty")
+        return rep
+
+    signals, families = _run_v2_engines(rep, data, corpus_lc, corpus_raw, iocs)
+
     # fold in the deep-static engine (PE/ELF/Office/PDF/script/archive/steg/YARA/reputation)
     try:
         deep = analyze_file(filepath, yara_rules_dir=yara_rules_dir,
@@ -4541,6 +4566,9 @@ def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optiona
                                       confidence=ind.confidence, mitre=ind.mitre_attack))
         for k, v in (deep.reputation or {}).items():
             rep.reputation[k] = v
+        for hk in ("imphash", "rich_header_hash"):   # PE clustering pivots
+            if hk in deep.hashes:
+                rep.hashes[hk] = deep.hashes[hk]
     except Exception as e:
         rep.notes.append(f"deep-static engine error: {e}")
 
@@ -4594,6 +4622,302 @@ def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optiona
     rep.report_md = generate_report(rep)
     rep.analysis_time_seconds = round(time.time() - start, 2)
     return rep
+
+
+# ==============================================================================
+# BULK / LARGE-TARGET SCANNING (directories, game repacks, oversized files)
+# ==============================================================================
+# Real-world use case: before installing a large download (e.g. a hundreds-of-GB
+# game repack pulled from a torrent), scan it for trojaned installers / cracks /
+# droppers WITHOUT reading every byte. The real threat surface (executables,
+# scripts, installers, small archives) is analyzed in full and scanned first;
+# huge opaque data blobs are sampled (head + tail) so we never load 500 GB into
+# memory; the whole tree collapses to one verdict that names the offending file.
+
+_EXEC_EXT = {".exe", ".dll", ".scr", ".com", ".pif", ".sys", ".cpl", ".ocx", ".drv",
+             ".msi", ".msix", ".appx", ".msp", ".bat", ".cmd", ".ps1", ".psm1", ".vbs",
+             ".vbe", ".js", ".jse", ".wsf", ".wsh", ".hta", ".jar", ".lnk", ".reg",
+             ".sh", ".py", ".apk", ".app", ".command", ".run", ".elf", ".out"}
+_ARCHIVE_EXT = {".zip", ".rar", ".7z", ".cab", ".arc", ".gz", ".bz2", ".xz", ".tar",
+                ".iso", ".img", ".vhd", ".vhdx", ".wim", ".ace", ".z", ".lzh"}
+
+_MB = 1024 * 1024
+DEFAULT_MAX_FULL_MB = 64          # files >= this size get a fast sampled scan
+_HEAD_SAMPLE = 8 * _MB
+_TAIL_SAMPLE = 2 * _MB
+
+
+def _risk_tier(path: str) -> int:
+    """0 = executables/scripts/installers (scan first), 1 = archives, 2 = everything else."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _EXEC_EXT:
+        return 0
+    if ext in _ARCHIVE_EXT:
+        return 1
+    return 2
+
+
+def _human_size(n: int) -> str:
+    f = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if f < 1024 or unit == "PB":
+            return f"{int(f)}{unit}" if unit == "B" else f"{f:.1f}{unit}"
+        f /= 1024
+    return f"{n}B"
+
+
+def _safe_size(p: str) -> int:
+    try:
+        return os.path.getsize(p)
+    except OSError:
+        return 0
+
+
+@dataclass
+class FileVerdict:
+    path: str
+    relpath: str
+    size_bytes: int
+    filetype: str
+    verdict: str
+    score: float
+    families: List[str] = field(default_factory=list)
+    top_reason: str = ""
+    sampled: bool = False
+    error: str = ""
+
+
+@dataclass
+class BulkReport:
+    root: str
+    is_directory: bool
+    total_files: int
+    scanned: int
+    sampled: int
+    skipped: int
+    verdict: str
+    score: float
+    counts: Dict[str, int] = field(default_factory=dict)
+    files: List[FileVerdict] = field(default_factory=list)
+    flagged: List[FileVerdict] = field(default_factory=list)
+    analysis_time_seconds: float = 0.0
+    timestamp: str = ""
+    notes: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+def _quick_fingerprint(head: bytes, tail: bytes, size: int) -> Dict[str, str]:
+    """Partial content fingerprint from the sampled head+tail (no full read)."""
+    return {"sha256_head": hashlib.sha256(head).hexdigest(),
+            "sha256_tail": hashlib.sha256(tail).hexdigest() if tail else "",
+            "size": str(size), "partial": "true"}
+
+
+def _stream_hashes(filepath: str, chunk: int = _MB) -> Dict[str, str]:
+    """True MD5/SHA-256 by streaming the file in fixed blocks (constant memory)."""
+    md5, sha = hashlib.md5(), hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for block in iter(lambda: f.read(chunk), b""):
+            md5.update(block)
+            sha.update(block)
+    return {"md5": md5.hexdigest(), "sha256": sha.hexdigest()}
+
+
+def analyze_large_file(filepath: str, head_bytes: int = _HEAD_SAMPLE,
+                       tail_bytes: int = _TAIL_SAMPLE, full_hash: bool = False) -> V2Report:
+    """Fast, memory-safe analysis of an oversized file: read only a head + tail sample
+    (never the whole file) and run the v2 static engines on it. Catches trojaned
+    installers, appended-PE overlays and dropper strings hidden in giant blobs."""
+    start = time.time()
+    filepath = os.path.abspath(filepath)
+    size = os.path.getsize(filepath)
+    with open(filepath, "rb") as f:
+        head = f.read(head_bytes)
+        if size > head_bytes + tail_bytes:
+            f.seek(size - tail_bytes)
+            tail = f.read(tail_bytes)
+        else:
+            tail = b""
+    sample = head + tail
+
+    hashes = _stream_hashes(filepath) if full_hash else _quick_fingerprint(head, tail, size)
+    strings = v2_extract_strings(sample)
+    corpus_raw = "\n".join(strings)
+    corpus_lc = corpus_raw.lower()
+    iocs = v2_extract_iocs(strings)
+
+    rep = V2Report(filepath=filepath, filename=os.path.basename(filepath), size_bytes=size,
+                   filetype=v2_detect_filetype(head, filepath), hashes=hashes,
+                   verdict="unknown", score=0.0,
+                   timestamp=datetime.now(timezone.utc).isoformat())
+    rep.notes.append(
+        f"sampled scan: first {head_bytes // _MB} MB + last {tail_bytes // _MB} MB of a "
+        f"{_human_size(size)} file (full-depth parsing skipped for speed); "
+        + ("true SHA-256 computed."
+           if full_hash else "hash is a partial head+tail fingerprint (use --full-hash for a true SHA-256)."))
+
+    signals, families = _run_v2_engines(rep, sample, corpus_lc, corpus_raw, iocs)
+
+    rep.iocs = iocs
+    rep.signals = sorted(signals, key=lambda s: (SEV_RANK[s.severity], -s.confidence))
+    rep.mitre = sorted({t for s in signals for t in s.mitre if t})
+    bonus = 25.0 if families and families[0].confidence >= 0.7 else 0.0
+    rep.score, rep.verdict = score_signals(signals, bonus=bonus)
+    rep.report_md = generate_report(rep)
+    rep.analysis_time_seconds = round(time.time() - start, 2)
+    return rep
+
+
+def _scan_one(filepath: str, root: str, max_full_bytes: int, full_hash: bool) -> FileVerdict:
+    rel = os.path.relpath(filepath, root) if root else os.path.basename(filepath)
+    size = _safe_size(filepath)
+    try:
+        if size >= max_full_bytes:
+            rep = analyze_large_file(filepath, full_hash=full_hash)
+            sampled = True
+        else:
+            rep = analyze_file_v2(filepath, use_llm=False)
+            sampled = False
+        top = rep.signals[0].title if rep.signals else ""
+        return FileVerdict(filepath, rel, size, rep.filetype, rep.verdict, rep.score,
+                           families=[f.family for f in rep.families[:3]], top_reason=top,
+                           sampled=sampled)
+    except Exception as e:
+        return FileVerdict(filepath, rel, size, "error", "unknown", 0.0, error=str(e))
+
+
+def _iter_files(root: str, max_files: int):
+    seen = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        # do not follow directory symlinks (avoid loops / escaping the tree)
+        dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+        for fn in filenames:
+            p = os.path.join(dirpath, fn)
+            if os.path.islink(p) or not os.path.isfile(p):
+                continue
+            yield p
+            seen += 1
+            if seen >= max_files:
+                return
+
+
+def scan_directory(root: str, max_full_mb: int = DEFAULT_MAX_FULL_MB, workers: Optional[int] = None,
+                   max_files: int = 20000, stop_on_malicious: bool = False,
+                   full_hash: bool = False) -> BulkReport:
+    """Scan a directory tree (e.g. a game repack) for malware. Risky files first,
+    small files in full, huge blobs sampled, in parallel, collapsed to one verdict.
+    Runs static-only (offline) per file for speed and determinism."""
+    import concurrent.futures
+    start = time.time()
+    root = os.path.abspath(root)
+    max_full_bytes = max_full_mb * _MB
+
+    files = list(_iter_files(root, max_files))
+    total = len(files)
+    files.sort(key=lambda p: (_risk_tier(p), -_safe_size(p)))  # dangerous stuff first
+
+    bulk = BulkReport(root=root, is_directory=True, total_files=total, scanned=0, sampled=0,
+                      skipped=0, verdict="clean", score=0.0,
+                      timestamp=datetime.now(timezone.utc).isoformat())
+    if total >= max_files:
+        bulk.notes.append(f"file cap reached: only the first {max_files} files were scanned "
+                          "(raise --max-files to cover everything).")
+    if not files:
+        bulk.notes.append("no files found under the target")
+        bulk.analysis_time_seconds = round(time.time() - start, 2)
+        return bulk
+
+    # bulk mode is static-only for speed (no per-file network reputation on hundreds of files)
+    prev_offline = os.environ.get("LAELAPS_OFFLINE")
+    os.environ["LAELAPS_OFFLINE"] = "1"
+    bulk.notes.append("static-only (offline) per file for speed; re-scan a flagged file on its own "
+                      "for network reputation (VirusTotal / MalwareBazaar).")
+    # pre-warm the common lazy loaders so parallel workers do not race on pip-install
+    for g in (get_pefile, get_yara, get_tlsh):
+        try:
+            g()
+        except Exception:
+            pass
+
+    workers = workers or min(8, (os.cpu_count() or 4))
+    results: List[FileVerdict] = []
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(_scan_one, p, root, max_full_bytes, full_hash): p for p in files}
+            stopped = False
+            for fut in concurrent.futures.as_completed(futs):
+                fv = fut.result()
+                results.append(fv)
+                bulk.sampled += 1 if fv.sampled else 0
+                if fv.error:
+                    bulk.skipped += 1
+                else:
+                    bulk.scanned += 1
+                if stop_on_malicious and fv.verdict == "malicious" and not stopped:
+                    stopped = True
+                    for f in futs:
+                        f.cancel()
+                    bulk.notes.append("stopped early on first malicious file (--stop-on-malicious)")
+                    break
+    finally:
+        if prev_offline is None:
+            os.environ.pop("LAELAPS_OFFLINE", None)
+        else:
+            os.environ["LAELAPS_OFFLINE"] = prev_offline
+
+    order = {"malicious": 0, "suspicious": 1, "unknown": 2, "clean": 3}
+    results.sort(key=lambda v: (order.get(v.verdict, 2), -v.score))
+    bulk.files = results
+    bulk.flagged = [v for v in results if v.verdict in ("malicious", "suspicious")]
+    counts: Dict[str, int] = {}
+    for v in results:
+        counts[v.verdict] = counts.get(v.verdict, 0) + 1
+    bulk.counts = counts
+    if results:
+        bulk.verdict = min(results, key=lambda v: order.get(v.verdict, 2)).verdict
+        bulk.score = max(v.score for v in results)
+    bulk.analysis_time_seconds = round(time.time() - start, 2)
+    return bulk
+
+
+def render_bulk(bulk: BulkReport) -> None:
+    badge = {"malicious": "🔴 MALICIOUS", "suspicious": "🟡 SUSPICIOUS",
+             "clean": "🟢 CLEAN", "unknown": "🔵 UNKNOWN"}[bulk.verdict]
+    print(f"# Laelaps bulk scan - {bulk.root}")
+    print(f"## Verdict: {badge}  ·  worst score {bulk.score:.1f}/100\n")
+    kind = "directory / repack" if bulk.is_directory else "target"
+    print(f"Scanned **{bulk.scanned}** file(s) from {kind} in {bulk.analysis_time_seconds}s "
+          f"({bulk.sampled} sampled, {bulk.skipped} unreadable). Breakdown: {bulk.counts}.\n")
+    if bulk.flagged:
+        print(f"### {len(bulk.flagged)} flagged file(s)\n")
+        print("| Verdict | Score | File | Type | Attribution / reason |")
+        print("|---|---|---|---|---|")
+        for v in bulk.flagged[:50]:
+            fam = ", ".join(v.families) if v.families else v.top_reason
+            print(f"| {v.verdict} | {v.score:.0f} | `{v.relpath}` ({_human_size(v.size_bytes)}) "
+                  f"| {v.filetype[:22]} | {fam[:60]} |")
+        print()
+        if bulk.verdict in ("malicious", "suspicious"):
+            print("> **Do not run the installer or any flagged file above.** Treat this download as "
+                  "unsafe until the flagged files are cleared. Confirm a high-impact hit in a sandbox "
+                  "(CAPE / ANY.RUN) before acting.\n")
+    else:
+        print("No malicious or suspicious files found. A clean static result is not a guarantee - "
+              "huge data blobs are sampled, not fully parsed.\n")
+    notable = [v for v in bulk.files if v.verdict == "unknown" and v.top_reason]
+    if notable:
+        print(f"### {len(notable)} file(s) with signals but an inconclusive verdict\n")
+        print("| Score | File | Type | Signal |")
+        print("|---|---|---|---|")
+        for v in notable[:25]:
+            reason = ", ".join(v.families) if v.families else v.top_reason
+            print(f"| {v.score:.0f} | `{v.relpath}` ({_human_size(v.size_bytes)}) "
+                  f"| {v.filetype[:22]} | {reason[:60]} |")
+        print()
+    for n in bulk.notes:
+        print(f"*Note: {n}*")
 
 
 # ==============================================================================
@@ -4651,6 +4975,17 @@ def main() -> int:
     ap.add_argument("--yara-rules", help="directory of extra YARA rules for the deep engine")
     ap.add_argument("--recursive", type=int, default=1,
                     help="archive recursion depth for the deep engine (default 1)")
+    ap.add_argument("--max-scan-size", type=int, default=DEFAULT_MAX_FULL_MB, metavar="MB",
+                    help=f"files at/above this size get a fast sampled (head+tail) scan "
+                         f"(default {DEFAULT_MAX_FULL_MB} MB)")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="parallel workers for a directory/repack scan (default: auto)")
+    ap.add_argument("--max-files", type=int, default=20000,
+                    help="cap on files scanned in a directory (default 20000)")
+    ap.add_argument("--stop-on-malicious", action="store_true",
+                    help="stop a directory scan at the first malicious file (fast go/no-go)")
+    ap.add_argument("--full-hash", action="store_true",
+                    help="compute a true streaming SHA-256 for large sampled files (slower)")
     ap.add_argument("--api", action="store_true", help="launch the REST API server instead of scanning")
     ap.add_argument("--api-host", default="127.0.0.1")
     ap.add_argument("--api-port", type=int, default=8765)
@@ -4689,16 +5024,33 @@ def main() -> int:
         ap.print_help()
         return 0
 
-    if re.fullmatch(r"[a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", args.target):
+    # a bare hash (only when it is not also a real path on disk) -> reputation lookup
+    if (re.fullmatch(r"[a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64}", args.target)
+            and not os.path.exists(args.target)):
         print(json.dumps(rep_hash(args.target), indent=2, default=str))
         return 0
 
+    # a directory (e.g. a game repack) -> parallel bulk scan
+    if os.path.isdir(args.target):
+        bulk = scan_directory(args.target, max_full_mb=args.max_scan_size, workers=args.workers,
+                              max_files=args.max_files, stop_on_malicious=args.stop_on_malicious,
+                              full_hash=args.full_hash)
+        if args.json:
+            print(json.dumps(bulk.to_dict(), indent=2, default=str))
+        else:
+            render_bulk(bulk)
+        return 1 if bulk.verdict in ("malicious", "suspicious") else 0
+
     if not os.path.isfile(args.target):
-        print(f"error: '{args.target}' is not a file or a valid hash", file=sys.stderr)
+        print(f"error: '{args.target}' is not a file, directory, or valid hash", file=sys.stderr)
         return 2
 
-    rep = analyze_file_v2(args.target, use_llm=not args.no_llm,
-                          yara_rules_dir=args.yara_rules, recursive_depth=args.recursive)
+    # an oversized single file -> fast sampled scan; otherwise full analysis
+    if _safe_size(args.target) >= args.max_scan_size * _MB:
+        rep = analyze_large_file(args.target, full_hash=args.full_hash)
+    else:
+        rep = analyze_file_v2(args.target, use_llm=not args.no_llm,
+                              yara_rules_dir=args.yara_rules, recursive_depth=args.recursive)
     if args.json:
         print(json.dumps(rep.to_dict(), indent=2, default=str))
     elif args.report:
