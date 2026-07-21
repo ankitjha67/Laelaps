@@ -6,6 +6,20 @@ Laelaps today is a static + reputation + attribution engine. This roadmap sequen
 upgrades that turn it into a full analysis framework, ranked by return on investment for a
 solo builder, with every tool checked for maintenance status and licensing.
 
+## Already in Laelaps
+
+Shipped since this roadmap was written (do not re-scope these):
+
+- **Large-download / repack scanning** - scan a whole directory tree or an oversized single
+  file (e.g. a hundreds-of-GB game repack pulled from a torrent) without reading every byte:
+  the executable/script/installer surface is analyzed in full and scanned first, huge data
+  blobs are sampled (first 8 MB + last 2 MB), files are scanned in parallel, and the tree
+  collapses to one aggregate verdict that names the offending file. Includes
+  embedded-executable-overlay detection for droppers hidden inside data blobs.
+- **PE clustering pivots (partial)** - imphash and rich-header hash are surfaced in the
+  report. Still to add from Phase 1: authentihash, telfhash (ELF), icon dhash, and TLSH/HAC-T
+  clustering.
+
 ## TL;DR
 
 - The single highest-uplift upgrade is adding a capability/behavior layer plus modern

@@ -31,12 +31,48 @@ python laelaps.py suspicious.exe --json        # machine-readable
 python laelaps.py --url https://setup-code.com/VSCode-Setup.exe   # scan a link
 python laelaps.py --url https://x.tld/p.exe --deep                # download + analyze (sandbox!)
 python laelaps.py <md5|sha1|sha256>            # reputation-only hash lookup
+python laelaps.py ./FitGirl-Repack/            # scan a whole download folder (see below)
+python laelaps.py huge-game-data.bin           # oversized file: fast head+tail sampled scan
 python laelaps.py <target> --offline           # never touch the network
 python laelaps.py --api                        # REST API server (OpenAPI docs at /docs)
 python laelaps.py --ui                         # Streamlit web UI
 ```
 
 Exit code is non-zero for `malicious`/`suspicious` verdicts (CI/pipeline friendly).
+
+## Scan a whole download before you install it
+
+Large downloads - a hundreds-of-GB game repack from a torrent, a bundle of installers -
+are exactly where a trojaned `setup.exe`, a fake crack, or a dropper hides. Laelaps scans
+the whole thing **before it hits your system**, without reading every byte:
+
+```bash
+python laelaps.py ./Some.Game.Repack/                     # scan the folder
+python laelaps.py ./Some.Game.Repack/ --json              # machine-readable summary
+python laelaps.py ./Some.Game.Repack/ --stop-on-malicious # fast go/no-go
+python laelaps.py big-game-data.bin --full-hash           # sampled scan + a real SHA-256
+```
+
+How it stays fast on huge inputs:
+
+- **Risky files first.** Executables, scripts and installers (`.exe`, `.dll`, `.msi`,
+  `.bat`, `.ps1`, `.lnk`, ...) are analyzed in full and scanned before anything else, so a
+  bad verdict surfaces early.
+- **Huge blobs are sampled, not read whole.** Any file at/above `--max-scan-size`
+  (default 64 MB) is scanned by reading only its first 8 MB + last 2 MB - enough to catch a
+  trojaned installer, an appended-executable overlay, or dropper strings, without ever
+  loading a 500 GB blob into memory.
+- **Parallel.** Files are scanned concurrently (`--workers`, default auto).
+- **One verdict, named offender.** The tree collapses to a single verdict plus a table of
+  the flagged files (which one, what family, why), so you know exactly what not to run.
+
+Flags: `--max-scan-size MB`, `--workers N`, `--max-files N`, `--stop-on-malicious`,
+`--full-hash`. Directory scans run static-only (offline) per file for speed; re-scan a
+single flagged file on its own for network reputation.
+
+> Static analysis is not a guarantee: a clean result means nothing obviously malicious was
+> found in the executable/script surface, and compressed game data is sampled, not fully
+> parsed. Treat a flagged installer as unsafe and confirm in a sandbox.
 
 ## Detection layers
 
@@ -112,6 +148,7 @@ recognition tokens with no working payload, entrypoint, or live infrastructure.
 ```bash
 python3 tests/smoke_test.py     # 34 checks: one sample per detection domain end-to-end
 python3 tests/corpus_test.py    # 21 malware families attributed with correct category + UI wiring
+python3 tests/bulk_test.py      # 18 checks: repack folder scan + large-file sampled scan
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -123,6 +160,10 @@ python3 tests/corpus_test.py    # 21 malware families attributed with correct ca
   StealC, Raccoon, AgentTesla, Snake, AsyncRAT, Quasar, njRAT, Remcos, NanoCore, DCRat, Cobalt
   Strike, Meterpreter, Amadey, SmokeLoader, Emotet, LockBit, Conti, BlackCat), and a headless
   render of the Streamlit report so the UI wiring is verified without a browser.
+- **`tests/bulk_test.py`** - a synthetic game repack (trojaned installer + benign readme +
+  a big data blob with an executable overlay): asserts the installer is flagged, the readme
+  stays clean, the huge blob is sampled rather than read whole, and the tree collapses to one
+  malicious verdict; plus the large-file sampled path and CLI exit codes.
 
 ## Important limitations (read these)
 

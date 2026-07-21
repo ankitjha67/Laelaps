@@ -28,3 +28,6 @@ jobs:
 
       - name: Attribution corpus test (family breadth + UI wiring)
         run: python tests/corpus_test.py
+
+      - name: Bulk / large-target scanner test (repack + sampled scan)
+        run: python tests/bulk_test.py
