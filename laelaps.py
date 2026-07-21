@@ -4893,9 +4893,132 @@ def analyze_large_file(filepath: str, head_bytes: int = _HEAD_SAMPLE,
     return rep
 
 
-def _scan_one(filepath: str, root: str, max_full_bytes: int, full_hash: bool) -> FileVerdict:
-    rel = os.path.relpath(filepath, root) if root else os.path.basename(filepath)
-    size = _safe_size(filepath)
+# ---- archive expansion (game repacks bundle the installer inside .zip/.7z) --------
+_ARCHIVE_EXPAND_CAP = 256 * _MB   # only expand archives up to this size; bigger ones are sampled
+_OFFICE_EXT = {".docx", ".docm", ".xlsx", ".xlsm", ".pptx", ".pptm", ".dotx", ".xltx",
+               ".potx", ".odt", ".ods", ".odp"}
+_py7zr = None
+
+
+def _get_py7zr():
+    global _py7zr
+    if _py7zr is None:
+        _py7zr = _ensure("py7zr")
+    return _py7zr
+
+
+def _archive_kind(path: str) -> str:
+    """Return 'zip' or '7z' for an expandable archive, else ''. Office docs and APKs
+    are deliberately left to their dedicated analyzers rather than expanded here."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _OFFICE_EXT or ext == ".apk":
+        return ""
+    if ext == ".7z":
+        return "7z"
+    if ext in (".zip", ".jar"):
+        return "zip"
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8)
+    except OSError:
+        return ""
+    if head[:6] == b"7z\xbc\xaf\x27\x1c":
+        return "7z"
+    if head[:4] == b"PK\x03\x04" and ext in ("", ".zip", ".jar"):
+        return "zip"
+    return ""
+
+
+def _expand_archive(path: str, kind: str, max_inner: int = 500,
+                    max_inner_size: int = 64 * _MB, max_total: int = 512 * _MB):
+    """Extract archive members into memory (bounded by count/size/total). Returns
+    (members, note) where members is a list of (name, bytes)."""
+    members: List[Tuple[str, bytes]] = []
+    note = ""
+    total = 0
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(path) as z:
+                for i in z.infolist():
+                    if len(members) >= max_inner:
+                        note = "inner-file cap reached"
+                        break
+                    if i.is_dir():
+                        continue
+                    if i.flag_bits & 0x1:
+                        note = "contains password-protected entries"
+                        continue
+                    if i.file_size > max_inner_size or total + i.file_size > max_total:
+                        continue
+                    try:
+                        data = z.read(i.filename)
+                    except Exception:
+                        continue
+                    total += len(data)
+                    members.append((i.filename, data))
+        elif kind == "7z":
+            py7zr = _get_py7zr()
+            if py7zr is None:
+                return [], "7z archive but py7zr is not installed (pip install py7zr)"
+            tmpd = tempfile.mkdtemp(prefix="laelaps_7z_")
+            try:
+                try:
+                    with py7zr.SevenZipFile(path, "r") as z:
+                        pw = False
+                        try:
+                            pw = z.needs_password()
+                        except Exception:
+                            pw = False
+                        if pw:
+                            return [], "password-protected 7z archive (cannot inspect)"
+                        z.extractall(path=tmpd)
+                except Exception as e:
+                    if "password" in (type(e).__name__ + " " + str(e)).lower():
+                        return [], "password-protected 7z archive (cannot inspect)"
+                    return [], f"7z extract error: {type(e).__name__}"
+                for dp, _dn, fns in os.walk(tmpd):
+                    for fn in fns:
+                        fp = os.path.join(dp, fn)
+                        if os.path.islink(fp) or not os.path.isfile(fp):
+                            continue
+                        if len(members) >= max_inner:
+                            note = "inner-file cap reached"
+                            break
+                        sz = _safe_size(fp)
+                        if sz > max_inner_size or total + sz > max_total:
+                            continue
+                        try:
+                            with open(fp, "rb") as fh:
+                                data = fh.read()
+                        except Exception:
+                            continue
+                        total += len(data)
+                        members.append((os.path.relpath(fp, tmpd).replace("\\", "/"), data))
+                    if note:
+                        break
+            finally:
+                shutil.rmtree(tmpd, ignore_errors=True)
+    except Exception as e:
+        note = f"archive expand error: {type(e).__name__}"
+    return members, note
+
+
+def _write_member_temp(data: bytes, name: str) -> str:
+    with tempfile.NamedTemporaryFile(
+            delete=False, suffix="__" + os.path.basename(name.replace("\\", "/"))[-40:]) as tf:
+        tf.write(data)
+        return tf.name
+
+
+def _rm(p: str) -> None:
+    try:
+        os.unlink(p)
+    except Exception:
+        pass
+
+
+def _scan_plain(filepath: str, rel: str, size: int, max_full_bytes: int,
+                full_hash: bool) -> FileVerdict:
     try:
         if size >= max_full_bytes:
             rep = analyze_large_file(filepath, full_hash=full_hash)
@@ -4909,6 +5032,69 @@ def _scan_one(filepath: str, root: str, max_full_bytes: int, full_hash: bool) ->
                            sampled=sampled)
     except Exception as e:
         return FileVerdict(filepath, rel, size, "error", "unknown", 0.0, error=str(e))
+
+
+def _scan_archive(path: str, rel: str, kind: str, max_full_bytes: int,
+                  full_hash: bool, depth: int) -> List[FileVerdict]:
+    """Expand an archive and scan each member as a first-class entry (relpath
+    'archive::member'); roll the members up into the archive's own verdict."""
+    members, note = _expand_archive(path, kind)
+    order = {"malicious": 0, "suspicious": 1, "unknown": 2, "clean": 3}
+    inner: List[FileVerdict] = []
+    zip_slip = False
+    for name, data in members:
+        nm = str(name).replace("\\", "/")
+        if nm.startswith("/") or ".." in nm.split("/"):
+            zip_slip = True
+        tp = _write_member_temp(data, nm)
+        try:
+            base = os.path.basename(tp)
+            for fv in _scan_one(tp, os.path.dirname(tp), max_full_bytes, full_hash, _depth=depth + 1):
+                if fv.relpath == base:
+                    fv.relpath = f"{rel}::{name}"
+                elif fv.relpath.startswith(base + "::"):
+                    fv.relpath = f"{rel}::{name}::" + fv.relpath[len(base) + 2:]
+                else:
+                    fv.relpath = f"{rel}::{name}"
+                fv.path = path
+                inner.append(fv)
+        finally:
+            _rm(tp)
+    worst, wscore, culprit = "clean", 0.0, ""
+    for fv in inner:
+        if order.get(fv.verdict, 2) < order.get(worst, 3):
+            worst, culprit = fv.verdict, fv.relpath
+        wscore = max(wscore, fv.score)
+    # an archive we could not open is surfaced as unknown, never silently clean
+    if not inner and note and order["unknown"] < order.get(worst, 3):
+        worst = "unknown"
+    # password-protected / traversal archives are suspicious even when we cannot see inside
+    if note and "password-protected" in note and order["suspicious"] < order.get(worst, 3):
+        worst = "suspicious"
+    if zip_slip and order["suspicious"] < order.get(worst, 3):
+        worst = "suspicious"
+    reason = note or (f"contains {worst}: {culprit}" if worst in ("malicious", "suspicious")
+                      else f"{kind} archive, {len(inner)} member(s) scanned")
+    if zip_slip:
+        reason = "path traversal (Zip Slip) in archive; " + reason
+    arch = FileVerdict(path, rel, _safe_size(path), f"{kind.upper()} archive", worst, wscore,
+                       top_reason=reason)
+    return [arch] + inner
+
+
+def _scan_one(filepath: str, root: str, max_full_bytes: int, full_hash: bool,
+              expand: bool = True, _depth: int = 0) -> List[FileVerdict]:
+    rel = os.path.relpath(filepath, root) if root else os.path.basename(filepath)
+    size = _safe_size(filepath)
+    if expand and _depth < 3 and 0 < size <= _ARCHIVE_EXPAND_CAP:
+        kind = _archive_kind(filepath)
+        if kind:
+            try:
+                return _scan_archive(filepath, rel, kind, max_full_bytes, full_hash, _depth)
+            except Exception as e:
+                return [FileVerdict(filepath, rel, size, f"{kind} archive", "unknown", 0.0,
+                                    error=f"expand failed: {e}")]
+    return [_scan_plain(filepath, rel, size, max_full_bytes, full_hash)]
 
 
 def _iter_files(root: str, max_files: int):
@@ -4928,7 +5114,7 @@ def _iter_files(root: str, max_files: int):
 
 def scan_directory(root: str, max_full_mb: int = DEFAULT_MAX_FULL_MB, workers: Optional[int] = None,
                    max_files: int = 20000, stop_on_malicious: bool = False,
-                   full_hash: bool = False) -> BulkReport:
+                   full_hash: bool = False, expand_archives: bool = True) -> BulkReport:
     """Scan a directory tree (e.g. a game repack) for malware. Risky files first,
     small files in full, huge blobs sampled, in parallel, collapsed to one verdict.
     Runs static-only (offline) per file for speed and determinism."""
@@ -4957,8 +5143,11 @@ def scan_directory(root: str, max_full_mb: int = DEFAULT_MAX_FULL_MB, workers: O
     os.environ["LAELAPS_OFFLINE"] = "1"
     bulk.notes.append("static-only (offline) per file for speed; re-scan a flagged file on its own "
                       "for network reputation (VirusTotal / MalwareBazaar).")
+    if expand_archives:
+        bulk.notes.append("archives (.zip/.7z) are expanded and their members scanned in place.")
     # pre-warm the common lazy loaders so parallel workers do not race on pip-install
-    for g in (get_pefile, get_yara, get_tlsh):
+    prewarm = [get_pefile, get_yara, get_tlsh] + ([_get_py7zr] if expand_archives else [])
+    for g in prewarm:
         try:
             g()
         except Exception:
@@ -4968,21 +5157,23 @@ def scan_directory(root: str, max_full_mb: int = DEFAULT_MAX_FULL_MB, workers: O
     results: List[FileVerdict] = []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = {ex.submit(_scan_one, p, root, max_full_bytes, full_hash): p for p in files}
+            futs = {ex.submit(_scan_one, p, root, max_full_bytes, full_hash, expand_archives): p
+                    for p in files}
             stopped = False
             for fut in concurrent.futures.as_completed(futs):
-                fv = fut.result()
-                results.append(fv)
-                bulk.sampled += 1 if fv.sampled else 0
-                if fv.error:
-                    bulk.skipped += 1
-                else:
-                    bulk.scanned += 1
-                if stop_on_malicious and fv.verdict == "malicious" and not stopped:
-                    stopped = True
-                    for f in futs:
-                        f.cancel()
-                    bulk.notes.append("stopped early on first malicious file (--stop-on-malicious)")
+                for fv in fut.result():
+                    results.append(fv)
+                    bulk.sampled += 1 if fv.sampled else 0
+                    if fv.error:
+                        bulk.skipped += 1
+                    else:
+                        bulk.scanned += 1
+                    if stop_on_malicious and fv.verdict == "malicious" and not stopped:
+                        stopped = True
+                        for f in futs:
+                            f.cancel()
+                        bulk.notes.append("stopped early on first malicious file (--stop-on-malicious)")
+                if stopped:
                     break
     finally:
         if prev_offline is None:
@@ -4990,6 +5181,10 @@ def scan_directory(root: str, max_full_mb: int = DEFAULT_MAX_FULL_MB, workers: O
         else:
             os.environ["LAELAPS_OFFLINE"] = prev_offline
 
+    return _aggregate_bulk(bulk, results, start)
+
+
+def _aggregate_bulk(bulk: BulkReport, results: List[FileVerdict], start: float) -> BulkReport:
     order = {"malicious": 0, "suspicious": 1, "unknown": 2, "clean": 3}
     results.sort(key=lambda v: (order.get(v.verdict, 2), -v.score))
     bulk.files = results
@@ -5003,6 +5198,37 @@ def scan_directory(root: str, max_full_mb: int = DEFAULT_MAX_FULL_MB, workers: O
         bulk.score = max(v.score for v in results)
     bulk.analysis_time_seconds = round(time.time() - start, 2)
     return bulk
+
+
+def scan_archive_file(path: str, max_full_mb: int = DEFAULT_MAX_FULL_MB,
+                      full_hash: bool = False) -> BulkReport:
+    """Expand and scan a single archive file (e.g. a .7z installer bundle) as a
+    mini bulk scan, so its members are surfaced individually."""
+    start = time.time()
+    path = os.path.abspath(path)
+    bulk = BulkReport(root=path, is_directory=False, total_files=1, scanned=0, sampled=0,
+                      skipped=0, verdict="clean", score=0.0,
+                      timestamp=datetime.now(timezone.utc).isoformat())
+    prev_offline = os.environ.get("LAELAPS_OFFLINE")
+    os.environ["LAELAPS_OFFLINE"] = "1"
+    bulk.notes.append("archive expanded; members scanned static-only (offline) for speed.")
+    for g in (get_pefile, get_yara, get_tlsh, _get_py7zr):
+        try:
+            g()
+        except Exception:
+            pass
+    try:
+        results = _scan_one(path, os.path.dirname(path), max_full_mb * _MB, full_hash)
+    finally:
+        if prev_offline is None:
+            os.environ.pop("LAELAPS_OFFLINE", None)
+        else:
+            os.environ["LAELAPS_OFFLINE"] = prev_offline
+    for fv in results:
+        bulk.sampled += 1 if fv.sampled else 0
+        bulk.skipped += 1 if fv.error else 0
+        bulk.scanned += 0 if fv.error else 1
+    return _aggregate_bulk(bulk, results, start)
 
 
 def render_bulk(bulk: BulkReport) -> None:
@@ -5127,6 +5353,8 @@ def main() -> int:
                     help="stop a directory scan at the first malicious file (fast go/no-go)")
     ap.add_argument("--full-hash", action="store_true",
                     help="compute a true streaming SHA-256 for large sampled files (slower)")
+    ap.add_argument("--no-archives", action="store_true",
+                    help="do not expand .zip/.7z archives (scan them as opaque files)")
     ap.add_argument("--attack-layer", metavar="FILE",
                     help="write a MITRE ATT&CK Navigator layer JSON for the scan (single-file target)")
     ap.add_argument("--api", action="store_true", help="launch the REST API server instead of scanning")
@@ -5177,7 +5405,7 @@ def main() -> int:
     if os.path.isdir(args.target):
         bulk = scan_directory(args.target, max_full_mb=args.max_scan_size, workers=args.workers,
                               max_files=args.max_files, stop_on_malicious=args.stop_on_malicious,
-                              full_hash=args.full_hash)
+                              full_hash=args.full_hash, expand_archives=not args.no_archives)
         if args.json:
             print(json.dumps(bulk.to_dict(), indent=2, default=str))
         else:
@@ -5190,6 +5418,16 @@ def main() -> int:
     if not os.path.isfile(args.target):
         print(f"error: '{args.target}' is not a file, directory, or valid hash", file=sys.stderr)
         return 2
+
+    # a single archive (e.g. a .7z installer bundle) -> expand and scan its members
+    if (not args.no_archives and _archive_kind(args.target)
+            and 0 < _safe_size(args.target) <= _ARCHIVE_EXPAND_CAP):
+        bulk = scan_archive_file(args.target, max_full_mb=args.max_scan_size, full_hash=args.full_hash)
+        if args.json:
+            print(json.dumps(bulk.to_dict(), indent=2, default=str))
+        else:
+            render_bulk(bulk)
+        return 1 if bulk.verdict in ("malicious", "suspicious") else 0
 
     # an oversized single file -> fast sampled scan; otherwise full analysis
     if _safe_size(args.target) >= args.max_scan_size * _MB:
