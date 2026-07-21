@@ -91,7 +91,7 @@ Laelaps runs **two engines in one namespace** over every sample.
 
 | # | Layer | What it catches |
 |---|-------|-----------------|
-| 1 | Multi-hash + reputation | MD5/SHA1/SHA256/SHA512, TLSH, ssdeep, imphash, rich-header hash, icon perceptual-hash → VirusTotal · MalwareBazaar · ThreatFox |
+| 1 | Multi-hash + reputation | MD5/SHA1/SHA256/SHA512, TLSH, ssdeep, imphash, rich-header hash, authentihash, elf_symhash, icon perceptual-hash → VirusTotal · MalwareBazaar · ThreatFox |
 | 2 | YARA | Built-in pack (injection, hollowing, ransom notes, Mimikatz, Log4Shell, Follina, Cobalt Strike, Meterpreter, …) + custom rules dir |
 | 3 | Format parsing | PE, ELF, Mach-O, PDF, Office/OLE, DEX/APK, scripts, LNK shortcuts |
 | 4 | Entropy & packers | Whole-file + sliding-window entropy, packer-section names, W+X sections |
@@ -163,6 +163,7 @@ python3 tests/lnk_test.py       # 14 checks: weaponized shortcut detection + ATT
 python3 tests/archive_test.py   # 12 checks: zip + 7z expansion, nested, password-protected
 python3 tests/lolbas_test.py    # 13 checks: living-off-the-land abuse flagged, bare mentions not
 python3 tests/icon_test.py      # 13 checks: perceptual icon hash, .ico rebuild, icon-reuse
+python3 tests/hashpivot_test.py # 13 checks: authentihash skip-logic + elf_symhash on real ELFs
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -194,6 +195,10 @@ python3 tests/icon_test.py      # 13 checks: perceptual icon hash, .ico rebuild,
   close while a different shape is far, a PE `.ico` is reconstructed from a synthetic GRPICONDIR,
   non-icon input degrades to `None`, and a directory where two files share one icon is flagged
   as icon reuse while an unrelated icon is not.
+- **`tests/hashpivot_test.py`** - the clustering hashes: authentihash's skip-logic (changing the
+  checksum / security directory / certificate leaves the hash unchanged, changing code does not),
+  graceful `None` on non-PE input, and elf_symhash computed against real system ELF binaries
+  (deterministic, distinct per binary, surfaced in the report).
 
 ## Important limitations (read these)
 
