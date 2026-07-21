@@ -17,8 +17,11 @@ Shipped since this roadmap was written (do not re-scope these):
   collapses to one aggregate verdict that names the offending file. Includes
   embedded-executable-overlay detection for droppers hidden inside data blobs.
 - **PE clustering pivots (partial)** - imphash and rich-header hash are surfaced in the
-  report. Still to add from Phase 1: authentihash, telfhash (ELF), icon dhash, and TLSH/HAC-T
-  clustering.
+  report. Still to add from Phase 1: authentihash, telfhash (ELF), and TLSH/HAC-T clustering.
+- **Icon perceptual-hashing** (Section 3) - a dhash of each file's icon (extracted from PE
+  resources or a standalone image), surfaced as `icon_dhash` and used in bulk scans to cluster
+  files that share an icon - catching fake installers that reuse a brand/game icon and droppers
+  shipped under many names.
 - **LNK (Windows shortcut) analysis** (Section 9) - a pure-Python shell-link parser extracts
   the shortcut's target and arguments, flags interpreter/LOLBin launches, encoded-PowerShell
   and in-shortcut downloaders, and payloads smuggled in a trailing overlay.
