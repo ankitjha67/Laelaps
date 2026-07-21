@@ -39,6 +39,9 @@ Shipped since this roadmap was written (do not re-scope these):
   signed binaries (certutil download, regsvr32 squiblydoo, mshta, msbuild/installutil AWL-bypass,
   bitsadmin, wmic, nc/bash/curl-pipe-shell) mapped to ATT&CK, applied corpus-wide so it catches
   LOLBin commands embedded in a PE, macro, LNK or document, not only in files parsed as scripts.
+- **OneNote (.one) embedded-file extraction** (Section 9) - detects OneNote by GUID magic, parses
+  the MS-ONESTORE FileDataStoreObject structures, and flags embedded executables and scripts (the
+  double-click-to-run lure that was a dominant initial-access vector in 2023-2024).
 
 ## TL;DR
 
