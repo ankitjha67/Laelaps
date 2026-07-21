@@ -18,7 +18,7 @@ jobs:
       - name: Install analysis dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pefile yara-python python-tlsh oletools lief Pillow numpy
+          pip install requests pefile yara-python python-tlsh oletools lief Pillow numpy py7zr
 
       - name: Compile
         run: python -m py_compile laelaps.py
@@ -34,3 +34,6 @@ jobs:
 
       - name: LNK shortcut + ATT&CK Navigator test
         run: python tests/lnk_test.py
+
+      - name: Archive-aware scanning test (zip + 7z expansion)
+        run: python tests/archive_test.py

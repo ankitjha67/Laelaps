@@ -24,6 +24,10 @@ Shipped since this roadmap was written (do not re-scope these):
   and in-shortcut downloaders, and payloads smuggled in a trailing overlay.
 - **ATT&CK Navigator layer export** (Section 10) - `--attack-layer FILE` writes the aggregated
   MITRE techniques as a Navigator layer JSON for coverage visualization.
+- **Archive-aware repack scanning** (Section 9) - `.zip`/`.jar`/`.7z` bundles are expanded and
+  each member scanned in place (named `archive::member`), nested archives are followed, and
+  password-protected / Zip-Slip archives are flagged even when their contents cannot be read.
+  This closes the real repack gap: FitGirl-style repacks ship the installer inside a `.7z`.
 
 ## TL;DR
 

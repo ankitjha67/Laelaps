@@ -12,6 +12,7 @@ oletools            # Office/OLE VBA + XLM macro extraction and analysis
 lief                # ELF / Mach-O parsing
 pdfminer.six        # deeper PDF structure analysis
 androguard          # APK / DEX manifest + permission analysis
+py7zr               # .7z archive expansion (game repacks bundle installers in .7z)
 Pillow              # image steganography (LSB) checks
 numpy               # LSB statistics
 

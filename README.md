@@ -64,12 +64,17 @@ How it stays fast on huge inputs:
   trojaned installer, an appended-executable overlay, or dropper strings, without ever
   loading a 500 GB blob into memory.
 - **Parallel.** Files are scanned concurrently (`--workers`, default auto).
+- **Archives are expanded.** `.zip`/`.jar`/`.7z` bundles (repacks ship the installer inside
+  one) are unpacked and each member scanned in place, named `archive::member` (and nested
+  archives are followed); password-protected and Zip-Slip archives are flagged even when their
+  contents can't be read. A single `.7z`/`.zip` target is expanded too. Turn this off with
+  `--no-archives`. Huge archives (over ~256 MB) are sampled rather than expanded.
 - **One verdict, named offender.** The tree collapses to a single verdict plus a table of
   the flagged files (which one, what family, why), so you know exactly what not to run.
 
 Flags: `--max-scan-size MB`, `--workers N`, `--max-files N`, `--stop-on-malicious`,
-`--full-hash`. Directory scans run static-only (offline) per file for speed; re-scan a
-single flagged file on its own for network reputation.
+`--full-hash`, `--no-archives`. Directory scans run static-only (offline) per file for speed;
+re-scan a single flagged file on its own for network reputation.
 
 > Static analysis is not a guarantee: a clean result means nothing obviously malicious was
 > found in the executable/script surface, and compressed game data is sampled, not fully
@@ -151,6 +156,7 @@ python3 tests/smoke_test.py     # 34 checks: one sample per detection domain end
 python3 tests/corpus_test.py    # 21 malware families attributed with correct category + UI wiring
 python3 tests/bulk_test.py      # 18 checks: repack folder scan + large-file sampled scan
 python3 tests/lnk_test.py       # 14 checks: weaponized shortcut detection + ATT&CK layer
+python3 tests/archive_test.py   # 12 checks: zip + 7z expansion, nested, password-protected
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -170,6 +176,10 @@ python3 tests/lnk_test.py       # 14 checks: weaponized shortcut detection + ATT
   shortcut launching an encoded PowerShell downloader is flagged, one with a trailing overlay
   is flagged, a plain notepad shortcut stays clean, and the ATT&CK Navigator layer export is
   well-formed.
+- **`tests/archive_test.py`** - a repack's `.zip` and `.7z` bundles (with an inert trojaned
+  installer inside): asserts the archive is expanded, the inner installer is flagged and named
+  `archive::member`, a benign inner file stays clean, nested zip-in-zip is followed, and a
+  password-protected archive is flagged suspicious even though its contents can't be read.
 
 ## Important limitations (read these)
 
