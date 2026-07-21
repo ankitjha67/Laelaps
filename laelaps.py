@@ -4052,6 +4052,79 @@ def scan_persistence(corpus_lc: str) -> List[Dict[str, str]]:
 
 
 # ==============================================================================
+# I2. LOLBAS / GTFOBins - LIVING-OFF-THE-LAND BINARY ABUSE
+# ------------------------------------------------------------------------------
+# Detect abuse of legitimate signed OS binaries (LOLBAS on Windows, GTFOBins on
+# Unix). Each rule requires the binary AND an abuse-context pattern (download/exec/
+# AWL-bypass/shell flags), so a bare mention of "certutil" in prose does not fire.
+# Runs corpus-wide, so it also catches LOLBin commands embedded in a PE, a macro,
+# an LNK or a document - not only in files parsed as scripts.
+# ==============================================================================
+# (label, function, abuse-context regex, mitre, severity)
+LOLBAS_SIGS: List[Tuple[str, str, str, List[str], str]] = [
+    ("certutil", "download / decode", r"certutil(?:\.exe)?[^\n]{0,80}(?:-urlcache|-f\s+https?://|-decode|-encode|-verifyctl)",
+     ["T1105", "T1140"], "high"),
+    ("bitsadmin", "download", r"bitsadmin(?:\.exe)?[^\n]{0,80}(?:/transfer|/create|/addfile)",
+     ["T1197"], "high"),
+    ("mshta", "execute", r"mshta(?:\.exe)?[^\n]{0,100}(?:https?://|javascript:|vbscript:|\.hta)",
+     ["T1218.005"], "high"),
+    ("regsvr32", "AWL bypass (squiblydoo)", r"regsvr32(?:\.exe)?[^\n]{0,100}(?:/i:https?://|scrobj|/u\s+/s|/s\s+/u|/i:.{0,40}\.sct)",
+     ["T1218.010"], "high"),
+    ("rundll32", "proxy execution", r"rundll32(?:\.exe)?[^\n]{0,100}(?:javascript:|url\.dll|shell32\.dll,control_rundll|\.dll\s*,\s*\w)",
+     ["T1218.011"], "medium"),
+    ("msbuild", "AWL bypass (inline task)", r"msbuild(?:\.exe)?[^\n]{0,80}\.(?:csproj|xml|proj|targets)",
+     ["T1127.001"], "high"),
+    ("installutil", "AWL bypass", r"installutil(?:\.exe)?[^\n]{0,80}(?:/logfile=|/u\s|/logtoconsole)",
+     ["T1218.004"], "high"),
+    ("regasm/regsvcs", "AWL bypass", r"(?:regasm|regsvcs)(?:\.exe)?[^\n]{0,60}\.dll",
+     ["T1218.009"], "high"),
+    ("wmic", "process-call execution", r"wmic[^\n]{0,80}(?:process\s+call\s+create|/node:)",
+     ["T1047"], "high"),
+    ("cmstp", "AWL bypass", r"cmstp(?:\.exe)?[^\n]{0,40}/s\b",
+     ["T1218.003"], "high"),
+    ("msdt", "diagnostic execution (Follina-class)", r"(?:ms-msdt:|msdt(?:\.exe)?[^\n]{0,40}(?:/id|it_browseforfile|invoke))",
+     ["T1218"], "high"),
+    ("hh", "compiled-help execution", r"\bhh(?:\.exe)?\s[^\n]{0,60}(?:https?://|\.chm|javascript:)",
+     ["T1218.001"], "medium"),
+    ("forfiles", "proxy execution", r"forfiles[^\n]{0,60}/c\s",
+     ["T1059"], "medium"),
+    ("esentutl", "raw copy (locked files)", r"esentutl(?:\.exe)?[^\n]{0,40}/y[^\n]{0,40}/vss",
+     ["T1005"], "medium"),
+    ("desktopimgdownldr", "download", r"desktopimgdownldr[^\n]{0,80}/lockscreenurl:https?://",
+     ["T1105"], "high"),
+    # ---- GTFOBins (Unix) ----
+    ("nc/ncat", "reverse shell", r"\bnc(?:at)?\b[^\n]{0,40}-e\b",
+     ["T1059.004"], "critical"),
+    ("socat", "reverse shell", r"socat[^\n]{0,60}exec:",
+     ["T1059.004"], "critical"),
+    ("bash", "reverse shell", r"(?:bash|sh)\s+-i\b[^\n]{0,40}(?:>&|/dev/tcp/)",
+     ["T1059.004"], "critical"),
+    ("curl/wget pipe shell", "download and execute", r"(?:curl|wget)\s[^\n|]{0,150}\|\s*(?:ba)?sh\b",
+     ["T1105", "T1059.004"], "critical"),
+    ("python", "inline shell", r"python[0-9.]*\s+-c[^\n]{0,120}(?:import\s+socket|pty\.spawn|subprocess\.call)",
+     ["T1059.006"], "high"),
+    ("perl", "inline shell", r"perl\s+-e[^\n]{0,100}(?:socket|exec|/bin/sh)",
+     ["T1059"], "high"),
+]
+
+
+def scan_lolbas(corpus_lc: str) -> List[Signal]:
+    """Flag living-off-the-land binary abuse (LOLBAS/GTFOBins) with abuse context."""
+    out: List[Signal] = []
+    for label, function, pat, mitre, sev in LOLBAS_SIGS:
+        m = re.search(pat, corpus_lc)
+        if m:
+            out.append(Signal(
+                engine="lolbas", severity=sev,
+                title=f"Living-off-the-land abuse: {label} ({function})",
+                detail=f"Abuse of the legitimate binary '{label}' for {function}: "
+                       f"`{m.group(0)[:120]}`. LOLBins let malware run without dropping tooling.",
+                confidence=0.8 if sev in ("critical", "high") else 0.6,
+                mitre=mitre, evidence=m.group(0)[:120]))
+    return out
+
+
+# ==============================================================================
 # J. SIGMA-STYLE BEHAVIORAL CORRELATION RULES
 # ==============================================================================
 def sigma_rules(caps: Dict[str, Dict], cred_hits: Dict[str, List[str]],
@@ -4634,6 +4707,7 @@ def _run_v2_engines(rep: V2Report, data: bytes, corpus_lc: str, corpus_raw: str,
                               title=f"Persistence: {p['technique']}", detail=f"MITRE {p['mitre']}",
                               confidence=0.65, mitre=p["mitre"].split(",")))
 
+    signals += scan_lolbas(corpus_lc)
     signals += sigma_rules(caps, cred_hits, c2, loaders, persistence, is_electron, is_dotnet)
     signals += run_family_yara(data)
 
