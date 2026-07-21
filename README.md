@@ -69,6 +69,9 @@ How it stays fast on huge inputs:
   archives are followed); password-protected and Zip-Slip archives are flagged even when their
   contents can't be read. A single `.7z`/`.zip` target is expanded too. Turn this off with
   `--no-archives`. Huge archives (over ~256 MB) are sampled rather than expanded.
+- **Icon-reuse detection.** A perceptual icon hash (dhash) is computed for each executable/
+  image; files across the download that share one icon are clustered and flagged - the tell of a
+  fake installer reusing a real brand/game icon, or a dropper shipped under many names.
 - **One verdict, named offender.** The tree collapses to a single verdict plus a table of
   the flagged files (which one, what family, why), so you know exactly what not to run.
 
@@ -88,7 +91,7 @@ Laelaps runs **two engines in one namespace** over every sample.
 
 | # | Layer | What it catches |
 |---|-------|-----------------|
-| 1 | Multi-hash + reputation | MD5/SHA1/SHA256/SHA512, TLSH, ssdeep, imphash → VirusTotal · MalwareBazaar · ThreatFox |
+| 1 | Multi-hash + reputation | MD5/SHA1/SHA256/SHA512, TLSH, ssdeep, imphash, rich-header hash, icon perceptual-hash → VirusTotal · MalwareBazaar · ThreatFox |
 | 2 | YARA | Built-in pack (injection, hollowing, ransom notes, Mimikatz, Log4Shell, Follina, Cobalt Strike, Meterpreter, …) + custom rules dir |
 | 3 | Format parsing | PE, ELF, Mach-O, PDF, Office/OLE, DEX/APK, scripts, LNK shortcuts |
 | 4 | Entropy & packers | Whole-file + sliding-window entropy, packer-section names, W+X sections |
@@ -159,6 +162,7 @@ python3 tests/bulk_test.py      # 18 checks: repack folder scan + large-file sam
 python3 tests/lnk_test.py       # 14 checks: weaponized shortcut detection + ATT&CK layer
 python3 tests/archive_test.py   # 12 checks: zip + 7z expansion, nested, password-protected
 python3 tests/lolbas_test.py    # 13 checks: living-off-the-land abuse flagged, bare mentions not
+python3 tests/icon_test.py      # 13 checks: perceptual icon hash, .ico rebuild, icon-reuse
 ```
 
 - **`tests/smoke_test.py`** - one crafted sample per detection domain (YARA/hash, reputation
@@ -186,6 +190,10 @@ python3 tests/lolbas_test.py    # 13 checks: living-off-the-land abuse flagged, 
   regsvr32/msbuild/mshta/bitsadmin/wmic/nc/curl-pipe-shell abuse is flagged with the right
   technique, a multi-LOLBin dropper is caught end-to-end, and bare mentions of the same binaries
   in prose do not false-positive.
+- **`tests/icon_test.py`** - the perceptual icon hash: a recolored/near-duplicate icon stays
+  close while a different shape is far, a PE `.ico` is reconstructed from a synthetic GRPICONDIR,
+  non-icon input degrades to `None`, and a directory where two files share one icon is flagged
+  as icon reuse while an unrelated icon is not.
 
 ## Important limitations (read these)
 

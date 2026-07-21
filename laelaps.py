@@ -1860,6 +1860,121 @@ def analyze_image(data: bytes) -> List[Indicator]:
 
 
 # ==============================================================================
+# LAYER 13b: ICON PERCEPTUAL HASHING (fake-installer / brand-icon reuse)
+# ==============================================================================
+# A perceptual hash (dhash) of a file's icon. Malicious installers and cracks in a
+# download routinely reuse a real brand/game icon, and a dropper often ships the
+# same payload under many names behind one icon. icon_dhash lets Laelaps cluster
+# those: a small Hamming distance between two icon hashes means the same picture.
+
+def _dhash_image(img, size: int = 8) -> str:
+    small = img.convert("L").resize((size + 1, size))
+    px = small.tobytes()
+    bits = 0
+    for row in range(size):
+        base = row * (size + 1)
+        for col in range(size):
+            bits = (bits << 1) | (1 if px[base + col] > px[base + col + 1] else 0)
+    return f"{bits:0{size * size // 4}x}"
+
+
+def icon_distance(a: str, b: str) -> int:
+    """Hamming distance between two icon dhashes (<= ~10 means the same picture)."""
+    try:
+        return bin(int(a, 16) ^ int(b, 16)).count("1")
+    except Exception:
+        return 64
+
+
+def image_dhash(data: bytes) -> Optional[str]:
+    """Perceptual dhash of raw image bytes (PNG/JPEG/BMP/GIF/ICO), or None."""
+    pil = get_pil()
+    if not pil:
+        return None
+    try:
+        img = pil.open(io.BytesIO(data))
+        img.load()
+        return _dhash_image(img)
+    except Exception:
+        return None
+
+
+def _build_ico_from_group(grp: bytes, icons: Dict[int, bytes]) -> Optional[bytes]:
+    """Reconstruct a .ico file from a PE GRPICONDIR plus its RT_ICON image map."""
+    try:
+        _res, _typ, count = struct.unpack_from("<HHH", grp, 0)
+        off = 6
+        entries = []
+        for _ in range(count):
+            fields = struct.unpack_from("<BBBBHHIH", grp, off)  # width..dwBytesInRes, nID
+            off += 14
+            idata = icons.get(fields[7])
+            if idata:
+                entries.append((fields, idata))
+        if not entries:
+            return None
+        dir_entries, blob, cur = b"", b"", 6 + len(entries) * 16
+        for fields, idata in entries:
+            bW, bH, bCC, bR, wP, wB, _dw, _nID = fields
+            dir_entries += struct.pack("<BBBBHHII", bW, bH, bCC, bR, wP, wB, len(idata), cur)
+            blob += idata
+            cur += len(idata)
+        return struct.pack("<HHH", 0, 1, len(entries)) + dir_entries + blob
+    except Exception:
+        return None
+
+
+def extract_pe_icon(data: bytes) -> Optional[bytes]:
+    """Best-effort extraction of a PE's primary icon group as .ico bytes."""
+    pe_mod = get_pefile()
+    if not pe_mod or data[:2] != b"MZ":
+        return None
+    pe = None
+    try:
+        pe = pe_mod.PE(data=data, fast_load=True)
+        pe.parse_data_directories(
+            directories=[pe_mod.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
+        if not hasattr(pe, "DIRECTORY_ENTRY_RESOURCE"):
+            return None
+        RT_ICON, RT_GROUP_ICON = 3, 14
+        icons: Dict[int, bytes] = {}
+        groups = []
+        for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+            which = getattr(entry, "id", None)
+            if which not in (RT_ICON, RT_GROUP_ICON):
+                continue
+            for sub in entry.directory.entries:
+                for lang in sub.directory.entries:
+                    blob = pe.get_data(lang.data.struct.OffsetToData, lang.data.struct.Size)
+                    if which == RT_ICON:
+                        icons[sub.id] = blob
+                    else:
+                        groups.append(blob)
+        if not groups or not icons:
+            return None
+        return _build_ico_from_group(groups[0], icons)
+    except Exception:
+        return None
+    finally:
+        if pe is not None:
+            try:
+                pe.close()
+            except Exception:
+                pass
+
+
+def file_icon_dhash(data: bytes, filetype: str) -> Optional[str]:
+    """icon_dhash for a file: extract a PE's icon, or hash a standalone image."""
+    ft = filetype.lower()
+    if ft.startswith("pe") or "windows executable" in ft:
+        ico = extract_pe_icon(data)
+        return image_dhash(ico) if ico else None
+    if any(k in ft for k in ("image", "png", "jpeg", "bmp", "gif", "icon")):
+        return image_dhash(data)
+    return None
+
+
+# ==============================================================================
 # LAYER 14: YARA MATCHING
 # ==============================================================================
 
@@ -4748,6 +4863,10 @@ def analyze_file_v2(filepath: str, use_llm: bool = True, yara_rules_dir: Optiona
         rep.notes.append("file is empty")
         return rep
 
+    icon = file_icon_dhash(data, rep.filetype)   # perceptual icon hash (fake-installer pivot)
+    if icon:
+        rep.hashes["icon_dhash"] = icon
+
     signals, families = _run_v2_engines(rep, data, corpus_lc, corpus_raw, iocs)
 
     # fold in the deep-static engine (PE/ELF/Office/PDF/script/archive/steg/YARA/reputation)
@@ -4882,6 +5001,7 @@ class FileVerdict:
     top_reason: str = ""
     sampled: bool = False
     error: str = ""
+    icon_dhash: str = ""
 
 
 @dataclass
@@ -5103,7 +5223,7 @@ def _scan_plain(filepath: str, rel: str, size: int, max_full_bytes: int,
         top = rep.signals[0].title if rep.signals else ""
         return FileVerdict(filepath, rel, size, rep.filetype, rep.verdict, rep.score,
                            families=[f.family for f in rep.families[:3]], top_reason=top,
-                           sampled=sampled)
+                           sampled=sampled, icon_dhash=rep.hashes.get("icon_dhash", ""))
     except Exception as e:
         return FileVerdict(filepath, rel, size, "error", "unknown", 0.0, error=str(e))
 
@@ -5270,8 +5390,32 @@ def _aggregate_bulk(bulk: BulkReport, results: List[FileVerdict], start: float) 
     if results:
         bulk.verdict = min(results, key=lambda v: order.get(v.verdict, 2)).verdict
         bulk.score = max(v.score for v in results)
+    # icon reuse: distinct files sharing one icon (dropper under many names / fake installers)
+    for cluster in _icon_reuse_clusters(results):
+        names = ", ".join(v.relpath for v in cluster[:5])
+        bulk.notes.append(f"icon reuse: {len(cluster)} files share one icon "
+                          f"({cluster[0].icon_dhash}) - {names}")
     bulk.analysis_time_seconds = round(time.time() - start, 2)
     return bulk
+
+
+def _icon_reuse_clusters(results: List[FileVerdict], thresh: int = 8) -> List[List[FileVerdict]]:
+    """Group files whose icons are perceptually near-identical (Hamming <= thresh)."""
+    withicon = [v for v in results if v.icon_dhash]
+    clusters: List[List[FileVerdict]] = []
+    used = set()
+    for i, a in enumerate(withicon):
+        if i in used:
+            continue
+        group = [a]
+        used.add(i)
+        for j in range(i + 1, len(withicon)):
+            if j not in used and icon_distance(a.icon_dhash, withicon[j].icon_dhash) <= thresh:
+                group.append(withicon[j])
+                used.add(j)
+        if len(group) >= 2:
+            clusters.append(group)
+    return clusters
 
 
 def scan_archive_file(path: str, max_full_mb: int = DEFAULT_MAX_FULL_MB,

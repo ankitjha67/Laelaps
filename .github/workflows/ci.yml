@@ -40,3 +40,6 @@ jobs:
 
       - name: LOLBAS / GTFOBins living-off-the-land test
         run: python tests/lolbas_test.py
+
+      - name: Icon perceptual-hash test (fake-installer / icon reuse)
+        run: python tests/icon_test.py
